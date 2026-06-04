@@ -10,7 +10,7 @@ Agent-guided escrow, delivery evidence, and negotiated settlement rails for Arbi
 
 ## Short Description
 
-ArbiFlow is an Arbitrum Sepolia settlement app for freelancers, merchants, agencies, APIs, and autonomous service agents. A seller creates an invoice, a payer funds it into escrow, and both sides can move through release, refund request, delivery evidence, timeout refund, and counterparty-approved partial settlement. Each invoice can also carry hashed agent identity references, a user mandate hash, a policy hash, an SLA deadline, and a portable settlement receipt hash. The agent panel reads live contract state and recommends only safe next actions for the connected wallet.
+ArbiFlow is an Arbitrum Sepolia settlement app for freelancers, merchants, agencies, APIs, and autonomous service agents. A seller creates an invoice, a payer funds it into escrow, and both sides can move through release, refund request, delivery evidence, timeout refund, counterparty-approved partial settlement, and optional provider service bonding. Each invoice can also carry hashed agent identity references, a user mandate hash, a policy hash, an SLA deadline, and a portable settlement receipt hash. The agent panel reads live contract state and recommends only safe next actions for the connected wallet.
 
 ## Problem
 
@@ -18,9 +18,9 @@ Small businesses, freelancers, and AI-powered service providers increasingly sel
 
 ## Solution
 
-ArbiFlow turns a payment into a transparent on-chain settlement workflow. Funds are held in escrow, delivery evidence can be attached, either side can propose a partial split settlement, and only the counterparty can accept that split. The agent reads the live contract state, wallet role, timing windows, evidence, and proposal data, then explains the exact wallet-confirmed actions available.
+ArbiFlow turns a payment into a transparent on-chain settlement workflow. Funds are held in escrow, delivery evidence can be attached, the provider can post an accountability bond, either side can propose a partial split settlement, and only the counterparty can accept that split. The agent reads the live contract state, wallet role, timing windows, evidence, bond status, and proposal data, then explains the exact wallet-confirmed actions available.
 
-The result is not a generic escrow demo. It is a compact settlement desk for real commercial workflows: encode agent mandate, pay, prove delivery, release, request refund, negotiate a split, accept settlement, emit a receipt, or rely on timeout protection if a counterparty disappears.
+The result is not a generic escrow demo. It is a compact settlement desk for real commercial workflows: encode agent mandate, post provider bond, pay, prove delivery, release, request refund, negotiate a split, accept settlement, emit a receipt, or rely on timeout protection if a counterparty disappears.
 
 ## Research-Informed Differentiator
 
@@ -30,7 +30,7 @@ Current agentic payment standards are moving quickly:
 - ERC-8004 focuses on agent identity, reputation, and validation registries.
 - AP2 focuses on cryptographic payment mandates and auditable proof of user intent.
 
-ArbiFlow’s differentiator is the missing commercial settlement layer between these ideas: escrowed agent commerce with delivery evidence, counterparty-approved split settlement, SLA context, and portable receipt hashes that can later feed reputation/validation systems.
+ArbiFlow’s differentiator is the missing commercial settlement layer between these ideas: escrowed agent commerce with delivery evidence, provider-side service bonds, counterparty-approved split settlement, SLA context, and portable receipt hashes that can later feed reputation/validation systems.
 
 ## Why Arbitrum
 
@@ -38,7 +38,7 @@ Arbitrum provides low-cost EVM execution and mature Solidity tooling, which is w
 
 ## Agentic Feature
 
-The agent reads the deployed contract state, connected wallet role, invoice timing, delivery evidence, refund window, settlement proposal, mandate hash, policy hash, SLA deadline, and portable receipt hash. It recommends whether the wallet can pay, cancel, attach mandate, release, request a refund, attach delivery evidence, propose a split, accept a counterparty proposal, approve a refund, or wait for timeout.
+The agent reads the deployed contract state, connected wallet role, invoice timing, delivery evidence, refund window, service bond, settlement proposal, mandate hash, policy hash, SLA deadline, and portable receipt hash. It recommends whether the wallet can pay, post a provider bond, cancel, attach mandate, release, request a refund, attach delivery evidence, propose a split, accept a counterparty proposal, approve a refund, or wait for timeout.
 
 The agent is deliberately safe: it does not sign transactions, custody funds, or invent authorization. The smart contract enforces the state machine. The agent makes the workflow understandable and reduces user error.
 
@@ -52,8 +52,9 @@ Smart contract quality:
 - Custom errors.
 - No admin withdrawal path.
 - Counterparty-approved settlement split.
+- Optional provider service bond with SLA/evidence-based slashing.
 - Portable receipt hash over final settlement context.
-- Tests for success, failure, timeout, authorization, ETH, ERC20, mandate, receipt, and split-settlement paths.
+- Tests for success, failure, timeout, authorization, ETH, ERC20, mandate, receipt, service bond, and split-settlement paths.
 
 Product-market fit:
 
@@ -61,12 +62,14 @@ Product-market fit:
 - Low Arbitrum fees make small commercial workflows practical.
 - Delivery evidence plus negotiated settlement maps to real service work better than a simple transfer.
 - Hashed mandates and receipts map to AI-agent commerce where spending authorization and accountability matter.
+- Provider service bonds give buyers more trust without adding a centralized marketplace.
 
 Innovation and creativity:
 
 - Combines escrow payments, delivery proof, refund windows, and partial compromise settlements.
 - Agent recommendations are based on live contract state, not generic help text.
 - Bridges agent mandates, identity references, SLA context, and settlement receipts without requiring an external registry.
+- Adds objective crypto-economic accountability for SLA misses without letting an LLM decide slashing.
 - No centralized arbitrator is required for negotiated settlement.
 
 Real problem solving:

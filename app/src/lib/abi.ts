@@ -32,7 +32,11 @@ export const invoiceEscrowAbi = [
           { name: "deliveryHash", type: "string", internalType: "string" },
           { name: "settlementMemoHash", type: "string", internalType: "string" },
           { name: "settlementProposedBy", type: "address", internalType: "address" },
-          { name: "settlementRecipientAmount", type: "uint256", internalType: "uint256" }
+          { name: "settlementRecipientAmount", type: "uint256", internalType: "uint256" },
+          { name: "serviceBondAmount", type: "uint256", internalType: "uint256" },
+          { name: "resolvedBondAmount", type: "uint256", internalType: "uint256" },
+          { name: "resolvedBondRecipient", type: "address", internalType: "address" },
+          { name: "serviceBondSlashed", type: "bool", internalType: "bool" }
         ]
       }
     ]
@@ -98,6 +102,16 @@ export const invoiceEscrowAbi = [
       { name: "mandateHash", type: "bytes32", internalType: "bytes32" },
       { name: "policyHash", type: "bytes32", internalType: "bytes32" },
       { name: "slaDeadline", type: "uint64", internalType: "uint64" }
+    ],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "postServiceBond",
+    stateMutability: "payable",
+    inputs: [
+      { name: "invoiceId", type: "uint256", internalType: "uint256" },
+      { name: "amount", type: "uint256", internalType: "uint256" }
     ],
     outputs: []
   },

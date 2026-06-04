@@ -36,6 +36,7 @@ pnpm build
 - On-chain delivery evidence for off-chain work handoff.
 - Counterparty-approved partial settlements for disputes without a centralized arbitrator.
 - Hashed agent mandates, policy hashes, SLA deadline, and portable settlement receipt hashes.
+- Optional provider service bonds that return on clean settlement and can be slashed for missed SLA without delivery evidence.
 - Timeout paths for inactive counterparties.
 - ETH and ERC20 support.
 - Agent panel that reads live contract state, wallet role, timing windows, evidence, and settlement proposals.

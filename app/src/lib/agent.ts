@@ -20,6 +20,10 @@ export type InvoiceRecord = {
   settlementMemoHash: string;
   settlementProposedBy: `0x${string}`;
   settlementRecipientAmount: bigint;
+  serviceBondAmount: bigint;
+  resolvedBondAmount: bigint;
+  resolvedBondRecipient: `0x${string}`;
+  serviceBondSlashed: boolean;
 };
 
 export type AgentContextRecord = {
@@ -79,6 +83,15 @@ export function assessInvoice(
         invoice.amount - invoice.settlementRecipientAmount
       )} back to payer.`
     : "No split settlement proposal is open.";
+  const bondNotes = [
+    invoice.serviceBondAmount > 0n
+      ? `Service bond active: ${formatAmount(invoice.serviceBondAmount)} at risk if SLA is missed without evidence.`
+      : invoice.resolvedBondAmount > 0n
+        ? `Service bond resolved: ${formatAmount(invoice.resolvedBondAmount)} ${
+            invoice.serviceBondSlashed ? "slashed to payer" : "returned to provider"
+          }.`
+        : "No provider service bond is posted."
+  ];
 
   if (invoice.state === 0) {
     return {
@@ -98,7 +111,7 @@ export function assessInvoice(
           reason: isCreator || isRecipient ? "Creator or recipient can cancel before payment." : "Only creator or recipient can cancel."
         }
       ],
-      notes: [invoice.metadataHash || "No metadata hash attached.", ...accountabilityNotes]
+      notes: [invoice.metadataHash || "No metadata hash attached.", ...accountabilityNotes, ...bondNotes]
     };
   }
 
@@ -141,7 +154,8 @@ export function assessInvoice(
         `Recipient timeout release: ${formatUnix(paidReleaseAt)}.`,
         settlementNote,
         invoice.deliveryHash ? `Delivery evidence: ${invoice.deliveryHash}.` : "No delivery evidence has been attached.",
-        ...accountabilityNotes
+        ...accountabilityNotes,
+        ...bondNotes
       ]
     };
   }
@@ -179,7 +193,8 @@ export function assessInvoice(
         `Payer timeout refund: ${formatUnix(refundAvailableAt)}.`,
         settlementNote,
         invoice.deliveryHash ? `Delivery evidence: ${invoice.deliveryHash}.` : "Delivery evidence is still missing.",
-        ...accountabilityNotes
+        ...accountabilityNotes,
+        ...bondNotes
       ]
     };
   }
@@ -188,7 +203,7 @@ export function assessInvoice(
     headline: `Invoice is ${stateLabels[invoice.state]?.toLowerCase() ?? "closed"}.`,
     risk: "closed",
     actions: [],
-    notes: ["No further escrow action is available.", ...accountabilityNotes]
+    notes: ["No further escrow action is available.", ...accountabilityNotes, ...bondNotes]
   };
 }
 

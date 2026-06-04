@@ -11,6 +11,7 @@
 - Partial settlements require a proposal from one counterparty and acceptance by the other.
 - Agent mandates are stored as hashes/references, not raw sensitive prompts or private user instructions.
 - Finalized receipt hashes are deterministic summaries and do not custody or redirect funds.
+- Service bonds are optional and resolved only through existing terminal states.
 
 ## Authorization
 
@@ -24,6 +25,8 @@
 - Payer or recipient can propose a partial split settlement while an invoice is paid or refund-requested.
 - Only the non-proposing counterparty can accept a settlement proposal.
 - Creator, recipient, or payer can attach an agent mandate before final invoice closure.
+- Recipient can post a service bond before final invoice closure.
+- Service bond is slashed only if refund occurs after SLA, no delivery evidence exists, and a payer is present.
 
 ## Test Coverage
 
@@ -53,6 +56,10 @@ Tests cover:
 - negotiated ERC20 split settlement
 - agent mandate attachment and authorization
 - portable settlement receipt event
+- ETH service bond return on release
+- ETH service bond slash on missed SLA
+- delivery evidence preventing service bond slash
+- ERC20 service bond return on split settlement
 
 ## Residual Risks
 
@@ -60,4 +67,5 @@ Tests cover:
 - Metadata is stored as a string reference and is not validated on-chain.
 - Settlement memos and delivery evidence are off-chain references; the contract enforces consent and payouts, not truthfulness of external files.
 - Agent mandate hashes are integrity anchors. External systems still need to store or verify the corresponding signed payload.
+- Service bond slashing uses objective time/evidence conditions, not subjective quality evaluation.
 - No centralized arbitration layer is included by design; compromise settlement is counterparty-approved.

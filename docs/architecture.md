@@ -39,6 +39,11 @@ Created, Paid, or RefundRequested
   v
 AgentContext attached
 
+Created, Paid, or RefundRequested
+  | postServiceBond by recipient
+  v
+Provider bond locked
+
 Created
   | cancelUnpaid by creator or recipient
   v
@@ -63,6 +68,10 @@ Cancelled
 - `settlementMemoHash`: off-chain settlement reasoning reference.
 - `settlementProposedBy`: payer or recipient that proposed the split.
 - `settlementRecipientAmount`: amount paid to recipient if counterparty accepts settlement.
+- `serviceBondAmount`: active provider bond locked in the invoice token.
+- `resolvedBondAmount`: bond amount resolved at final settlement.
+- `resolvedBondRecipient`: account that received the resolved bond.
+- `serviceBondSlashed`: whether the bond was paid to payer after a missed SLA.
 
 ## Agent Context
 
@@ -76,6 +85,18 @@ Each invoice can carry a lightweight agent accountability layer:
 - `attachedBy`: account that attached the context.
 
 This keeps the contract independent from any one registry while creating a deterministic bridge to agent identity, reputation, and signed mandate systems.
+
+## Service Bond
+
+The recipient can post an optional service bond in the invoice token. The bond is separate from the payer escrow and creates provider-side accountability:
+
+- successful release: bond returns to recipient
+- accepted split settlement: bond returns to recipient
+- unpaid cancellation: bond returns to recipient
+- refund after missed SLA with no delivery evidence: bond is slashed to payer
+- refund before SLA or with delivery evidence: bond returns to recipient
+
+This creates a dual-deposit-like pattern without requiring a centralized arbitrator. The contract still does not judge delivery quality; it enforces an objective SLA/evidence condition.
 
 ## Agent Layer
 
@@ -111,6 +132,7 @@ ArbiFlow deliberately avoids an admin arbitrator. If delivery is disputed, payer
 - invoice parties, token, amount, and final state
 - metadata, delivery evidence, and settlement memo
 - split-settlement payout
+- resolved service bond amount, recipient, and slashing status
 - agent hashes, mandate hash, policy hash, and SLA deadline
 
 When an invoice closes through release, refund, cancellation, or settlement, the contract emits `SettlementReceiptFinalized`. This creates a compact receipt that can be indexed now and later attached to reputation systems or validator flows.

@@ -130,6 +130,82 @@ describe("InvoiceEscrow", function () {
     expect(receiptHash).to.not.equal(ZERO_HASH);
   });
 
+  it("returns posted service bond to recipient on successful release", async function () {
+    const { id, params } = await createEthInvoice();
+    const bond = ethers.parseEther("0.25");
+
+    await expect(() => escrow.connect(recipient).postServiceBond(id, bond, { value: bond })).to.changeEtherBalances(
+      [recipient.address, await escrow.getAddress()],
+      [-bond, bond]
+    );
+
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+
+    await expect(() => escrow.connect(payer).release(id)).to.changeEtherBalances(
+      [await escrow.getAddress(), recipient.address],
+      [-(params.amount + bond), params.amount + bond]
+    );
+
+    const invoice = await escrow.getInvoice(id);
+    expect(invoice.serviceBondAmount).to.equal(0);
+    expect(invoice.resolvedBondAmount).to.equal(bond);
+    expect(invoice.resolvedBondRecipient).to.equal(recipient.address);
+    expect(invoice.serviceBondSlashed).to.equal(false);
+  });
+
+  it("slashes service bond to payer when SLA is missed without delivery evidence", async function () {
+    const { id, params } = await createEthInvoice({ timeout: HOUR });
+    const now = await latestTimestamp();
+    const bond = ethers.parseEther("0.2");
+
+    await escrow
+      .connect(creator)
+      .attachAgentMandate(id, ZERO_HASH, ZERO_HASH, ethers.id("sla mandate"), ethers.id("delivery policy"), now + HOUR);
+    await escrow.connect(recipient).postServiceBond(id, bond, { value: bond });
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+
+    await increaseTime(HOUR + 1);
+    await escrow.connect(payer).requestRefund(id);
+    await increaseTime(HOUR + 1);
+
+    await expect(() => escrow.connect(payer).refund(id)).to.changeEtherBalances(
+      [await escrow.getAddress(), payer.address],
+      [-(params.amount + bond), params.amount + bond]
+    );
+
+    const invoice = await escrow.getInvoice(id);
+    expect(invoice.serviceBondAmount).to.equal(0);
+    expect(invoice.resolvedBondAmount).to.equal(bond);
+    expect(invoice.resolvedBondRecipient).to.equal(payer.address);
+    expect(invoice.serviceBondSlashed).to.equal(true);
+  });
+
+  it("does not slash service bond when delivery evidence exists", async function () {
+    const { id, params } = await createEthInvoice({ timeout: HOUR });
+    const now = await latestTimestamp();
+    const bond = ethers.parseEther("0.2");
+
+    await escrow
+      .connect(creator)
+      .attachAgentMandate(id, ZERO_HASH, ZERO_HASH, ethers.id("delivery mandate"), ZERO_HASH, now + HOUR);
+    await escrow.connect(recipient).postServiceBond(id, bond, { value: bond });
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+    await escrow.connect(recipient).markDelivered(id, "ipfs://delivery-proof-before-refund");
+
+    await increaseTime(HOUR + 1);
+    await escrow.connect(payer).requestRefund(id);
+    await increaseTime(HOUR + 1);
+
+    await expect(() => escrow.connect(payer).refund(id)).to.changeEtherBalances(
+      [await escrow.getAddress(), payer.address, recipient.address],
+      [-(params.amount + bond), params.amount, bond]
+    );
+
+    const invoice = await escrow.getInvoice(id);
+    expect(invoice.resolvedBondRecipient).to.equal(recipient.address);
+    expect(invoice.serviceBondSlashed).to.equal(false);
+  });
+
   it("validates mandate authorization and required mandate hash", async function () {
     const { id, params } = await createEthInvoice();
 
@@ -398,6 +474,33 @@ describe("InvoiceEscrow", function () {
 
     expect(await token.balanceOf(recipient.address)).to.equal(recipientAmount);
     expect(await token.balanceOf(payer.address)).to.equal(payerAmount);
+    expect(await token.balanceOf(await escrow.getAddress())).to.equal(0);
+  });
+
+  it("handles ERC20 service bond return on settlement", async function () {
+    const amount = ethers.parseUnits("300", 18);
+    const bond = ethers.parseUnits("30", 18);
+    await token.mint(payer.address, amount);
+    await token.mint(recipient.address, bond);
+
+    const now = await latestTimestamp();
+    const tx = await escrow
+      .connect(creator)
+      .createInvoice(recipient.address, await token.getAddress(), amount, "ipfs://erc20-bond", now + DAY, DAY);
+    const receipt = await tx.wait();
+    const id = receipt.logs.find((log) => log.fragment && log.fragment.name === "InvoiceCreated").args.invoiceId;
+
+    await token.connect(recipient).approve(await escrow.getAddress(), bond);
+    await escrow.connect(recipient).postServiceBond(id, bond);
+
+    await token.connect(payer).approve(await escrow.getAddress(), amount);
+    await escrow.connect(payer).payInvoice(id);
+
+    const recipientAmount = ethers.parseUnits("240", 18);
+    await escrow.connect(payer).proposeSettlement(id, recipientAmount, "ipfs://erc20-bonded-settlement");
+    await escrow.connect(recipient).acceptSettlement(id);
+
+    expect(await token.balanceOf(recipient.address)).to.equal(recipientAmount + bond);
     expect(await token.balanceOf(await escrow.getAddress())).to.equal(0);
   });
 

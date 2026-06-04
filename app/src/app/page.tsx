@@ -91,6 +91,7 @@ export default function Home() {
   const [deliveryHash, setDeliveryHash] = useState("ipfs://arbiflow-delivery-proof");
   const [settlementAmount, setSettlementAmount] = useState("");
   const [settlementMemoHash, setSettlementMemoHash] = useState("ipfs://arbiflow-settlement-plan");
+  const [serviceBondAmount, setServiceBondAmount] = useState("0.01");
 
   useEffect(() => {
     const storedAddress = window.localStorage.getItem("arbiflow-contract-address");
@@ -332,6 +333,21 @@ export default function Home() {
       hashOrZero(mandateForm.policy),
       slaDeadline
     ]);
+  }
+
+  async function submitServiceBond(invoice: InvoiceRecord) {
+    let amount: bigint;
+    try {
+      amount = parseEther(serviceBondAmount || "0");
+    } catch {
+      setTxError("Service bond amount is invalid.");
+      return;
+    }
+    if (amount === 0n) {
+      setTxError("Service bond amount must be greater than zero.");
+      return;
+    }
+    await runWrite("postServiceBond", [invoice.id, amount], invoice.token === zeroAddress ? amount : undefined);
   }
 
   async function runWrite(functionName: string, args: readonly unknown[], value?: bigint) {
@@ -596,6 +612,10 @@ export default function Home() {
                   <dt>Receipt</dt>
                   <dd>{selectedReceiptHash ? shortHash(selectedReceiptHash) : "pending"}</dd>
                 </div>
+                <div>
+                  <dt>Bond</dt>
+                  <dd>{formatBondStatus(selectedInvoice)}</dd>
+                </div>
               </dl>
 
               <div className="actionStack">
@@ -677,6 +697,33 @@ export default function Home() {
                     <small>Mandate {shortHash(selectedAgentContext.mandateHash)} · Policy {shortHash(selectedAgentContext.policyHash)}</small>
                   </div>
                 ) : null}
+              </section>
+
+              <section className="bondDesk" aria-label="Service bond">
+                <label>
+                  Provider bond
+                  <input
+                    value={serviceBondAmount}
+                    onChange={(event) => setServiceBondAmount(event.target.value)}
+                    inputMode="decimal"
+                    placeholder="0.01"
+                  />
+                </label>
+                <button
+                  className="button action"
+                  type="button"
+                  disabled={!isConnected || !isSelectedRecipient || selectedInvoice.state >= 3 || Boolean(pendingAction)}
+                  title="Recipient can post an optional service bond. It returns on clean settlement and can be slashed if SLA is missed without delivery evidence."
+                  onClick={() => submitServiceBond(selectedInvoice)}
+                >
+                  {pendingAction === "postServiceBond" ? <Loader2 className="spin" aria-hidden /> : <ShieldCheck aria-hidden />}
+                  Post bond
+                </button>
+                <div className="proposalBox">
+                  <span>SLA bond status</span>
+                  <strong>{formatBondStatus(selectedInvoice)}</strong>
+                  <small>{formatBondDetail(selectedInvoice)}</small>
+                </div>
               </section>
 
               <section className="settlementDesk" aria-label="Settlement tools">
@@ -834,7 +881,15 @@ function toInvoiceRecord(id: bigint, raw: unknown): InvoiceRecord {
     settlementProposedBy: (value.settlementProposedBy ?? value[14] ?? zeroAddress) as `0x${string}`,
     settlementRecipientAmount: BigInt(
       value.settlementRecipientAmount as bigint | string | number | undefined ?? (value[15] as bigint | undefined) ?? 0n
-    )
+    ),
+    serviceBondAmount: BigInt(
+      value.serviceBondAmount as bigint | string | number | undefined ?? (value[16] as bigint | undefined) ?? 0n
+    ),
+    resolvedBondAmount: BigInt(
+      value.resolvedBondAmount as bigint | string | number | undefined ?? (value[17] as bigint | undefined) ?? 0n
+    ),
+    resolvedBondRecipient: (value.resolvedBondRecipient ?? value[18] ?? zeroAddress) as `0x${string}`,
+    serviceBondSlashed: Boolean(value.serviceBondSlashed ?? value[19] ?? false)
   };
 }
 
@@ -885,6 +940,25 @@ function formatSettlement(invoice: InvoiceRecord) {
   const payer = trimDecimal(formatEther(invoice.amount - invoice.settlementRecipientAmount));
   const suffix = invoice.token === zeroAddress ? "ETH" : "TOKEN";
   return `${recipient} ${suffix} to recipient, ${payer} ${suffix} back`;
+}
+
+function formatBondStatus(invoice: InvoiceRecord) {
+  if (invoice.serviceBondAmount > 0n) return `${trimDecimal(formatEther(invoice.serviceBondAmount))} active`;
+  if (invoice.resolvedBondAmount > 0n) return invoice.serviceBondSlashed ? "slashed" : "returned";
+  return "none";
+}
+
+function formatBondDetail(invoice: InvoiceRecord) {
+  const suffix = invoice.token === zeroAddress ? "ETH" : "TOKEN";
+  if (invoice.serviceBondAmount > 0n) {
+    return `${trimDecimal(formatEther(invoice.serviceBondAmount))} ${suffix} is locked as provider accountability.`;
+  }
+  if (invoice.resolvedBondAmount > 0n) {
+    return `${trimDecimal(formatEther(invoice.resolvedBondAmount))} ${suffix} ${
+      invoice.serviceBondSlashed ? "was paid to payer after missed SLA" : "was returned to provider"
+    }.`;
+  }
+  return "Recipient can post an optional bond before final settlement.";
 }
 
 function formatTimestamp(value: bigint) {
