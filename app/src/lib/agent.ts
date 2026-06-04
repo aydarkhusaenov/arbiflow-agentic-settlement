@@ -1,6 +1,6 @@
-import { zeroAddress } from "viem";
+import { formatEther, zeroAddress } from "viem";
 
-export const stateLabels = ["Created", "Paid", "Refund requested", "Released", "Refunded", "Cancelled"] as const;
+export const stateLabels = ["Created", "Paid", "Refund requested", "Released", "Refunded", "Cancelled", "Settled"] as const;
 
 export type InvoiceRecord = {
   id: bigint;
@@ -13,12 +13,17 @@ export type InvoiceRecord = {
   paidAt: bigint;
   timeout: bigint;
   refundRequestedAt: bigint;
+  settlementProposedAt: bigint;
   state: number;
   metadataHash: string;
+  deliveryHash: string;
+  settlementMemoHash: string;
+  settlementProposedBy: `0x${string}`;
+  settlementRecipientAmount: bigint;
 };
 
 export type AgentAction = {
-  id: "pay" | "release" | "requestRefund" | "refund" | "cancel";
+  id: "pay" | "release" | "requestRefund" | "refund" | "cancel" | "acceptSettlement";
   label: string;
   enabled: boolean;
   reason: string;
@@ -45,6 +50,14 @@ export function assessInvoice(
   const paidReleaseAt = Number(invoice.paidAt + invoice.timeout);
   const refundAvailableAt = Number(invoice.refundRequestedAt + invoice.timeout);
   const tokenLabel = invoice.token === zeroAddress ? "ETH" : "ERC20";
+  const settlementOpen = invoice.settlementProposedBy !== zeroAddress;
+  const isSettlementProposer = sameAddress(account, invoice.settlementProposedBy);
+  const canAcceptSettlement = settlementOpen && (isPayer || isRecipient) && !isSettlementProposer;
+  const settlementNote = settlementOpen
+    ? `Settlement proposal: ${formatAmount(invoice.settlementRecipientAmount)} to recipient, ${formatAmount(
+        invoice.amount - invoice.settlementRecipientAmount
+      )} back to payer.`
+    : "No split settlement proposal is open.";
 
   if (invoice.state === 0) {
     return {
@@ -71,9 +84,21 @@ export function assessInvoice(
   if (invoice.state === 1) {
     const recipientCanRelease = isRecipient && nowSeconds >= paidReleaseAt;
     return {
-      headline: "Funds are locked in escrow.",
-      risk: "low",
+      headline: settlementOpen ? "Funds are escrowed and a settlement proposal is open." : "Funds are locked in escrow.",
+      risk: settlementOpen ? "medium" : "low",
       actions: [
+        ...(settlementOpen
+          ? [
+              {
+                id: "acceptSettlement" as const,
+                label: "Accept split settlement",
+                enabled: Boolean(canAcceptSettlement),
+                reason: canAcceptSettlement
+                  ? "Counterparty can accept the proposed payout split."
+                  : "Only the counterparty can accept this proposal."
+              }
+            ]
+          : []),
         {
           id: "release",
           label: "Release funds",
@@ -91,16 +116,32 @@ export function assessInvoice(
           reason: isPayer ? "Payer can open a refund window." : "Only payer can request a refund."
         }
       ],
-      notes: [`Recipient timeout release: ${formatUnix(paidReleaseAt)}.`]
+      notes: [
+        `Recipient timeout release: ${formatUnix(paidReleaseAt)}.`,
+        settlementNote,
+        invoice.deliveryHash ? `Delivery evidence: ${invoice.deliveryHash}.` : "No delivery evidence has been attached."
+      ]
     };
   }
 
   if (invoice.state === 2) {
     const payerCanRefund = isPayer && nowSeconds >= refundAvailableAt;
     return {
-      headline: "Refund window is active.",
+      headline: settlementOpen ? "Refund window is active with a proposed compromise." : "Refund window is active.",
       risk: "medium",
       actions: [
+        ...(settlementOpen
+          ? [
+              {
+                id: "acceptSettlement" as const,
+                label: "Accept split settlement",
+                enabled: Boolean(canAcceptSettlement),
+                reason: canAcceptSettlement
+                  ? "Counterparty can accept the proposed payout split."
+                  : "Only the counterparty can accept this proposal."
+              }
+            ]
+          : []),
         {
           id: "refund",
           label: "Refund payer",
@@ -112,7 +153,11 @@ export function assessInvoice(
               : "Payer must wait for timeout."
         }
       ],
-      notes: [`Payer timeout refund: ${formatUnix(refundAvailableAt)}.`]
+      notes: [
+        `Payer timeout refund: ${formatUnix(refundAvailableAt)}.`,
+        settlementNote,
+        invoice.deliveryHash ? `Delivery evidence: ${invoice.deliveryHash}.` : "Delivery evidence is still missing."
+      ]
     };
   }
 
@@ -122,6 +167,14 @@ export function assessInvoice(
     actions: [],
     notes: ["No further escrow action is available."]
   };
+}
+
+function formatAmount(value: bigint) {
+  return `${trimDecimal(formatEther(value))} ETH-equivalent`;
+}
+
+function trimDecimal(value: string) {
+  return value.replace(/(\.\d*?[1-9])0+$/, "$1").replace(/\.0+$/, "");
 }
 
 function formatUnix(seconds: number) {

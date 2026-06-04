@@ -3,8 +3,8 @@ import { Providers } from "./providers";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "ArbiFlow Agentic Escrow",
-  description: "Agent-assisted invoice escrow and payment settlement on Arbitrum."
+  title: "ArbiFlow Agentic Settlement",
+  description: "Agent-assisted invoice escrow, delivery evidence, and settlement on Arbitrum."
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

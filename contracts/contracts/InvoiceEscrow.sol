@@ -14,7 +14,8 @@ contract InvoiceEscrow is ReentrancyGuard {
         RefundRequested,
         Released,
         Refunded,
-        Cancelled
+        Cancelled,
+        Settled
     }
 
     struct Invoice {
@@ -27,8 +28,13 @@ contract InvoiceEscrow is ReentrancyGuard {
         uint64 paidAt;
         uint64 timeout;
         uint64 refundRequestedAt;
+        uint64 settlementProposedAt;
         State state;
         string metadataHash;
+        string deliveryHash;
+        string settlementMemoHash;
+        address settlementProposedBy;
+        uint256 settlementRecipientAmount;
     }
 
     uint256 public invoiceCount;
@@ -49,6 +55,20 @@ contract InvoiceEscrow is ReentrancyGuard {
     event RefundRequested(uint256 indexed invoiceId, address indexed payer, uint64 refundAvailableAt);
     event InvoiceRefunded(uint256 indexed invoiceId, address indexed payer, uint256 amount);
     event InvoiceCancelled(uint256 indexed invoiceId);
+    event DeliveryMarked(uint256 indexed invoiceId, address indexed recipient, string deliveryHash);
+    event SettlementProposed(
+        uint256 indexed invoiceId,
+        address indexed proposedBy,
+        uint256 recipientAmount,
+        uint256 payerAmount,
+        string memoHash
+    );
+    event SettlementAccepted(
+        uint256 indexed invoiceId,
+        address indexed acceptedBy,
+        uint256 recipientAmount,
+        uint256 payerAmount
+    );
 
     error InvalidRecipient();
     error InvalidAmount();
@@ -59,6 +79,8 @@ contract InvoiceEscrow is ReentrancyGuard {
     error InvoicePastDue();
     error IncorrectPayment();
     error RefundTimeoutNotReached(uint256 availableAt);
+    error InvalidSettlementAmount();
+    error NoSettlementProposal();
 
     function createInvoice(
         address recipient,
@@ -83,8 +105,13 @@ contract InvoiceEscrow is ReentrancyGuard {
             paidAt: 0,
             timeout: timeout,
             refundRequestedAt: 0,
+            settlementProposedAt: 0,
             state: State.Created,
-            metadataHash: metadataHash
+            metadataHash: metadataHash,
+            deliveryHash: "",
+            settlementMemoHash: "",
+            settlementProposedBy: address(0),
+            settlementRecipientAmount: 0
         });
 
         emit InvoiceCreated(invoiceId, msg.sender, recipient, token, amount, dueAt, timeout, metadataHash);
@@ -132,6 +159,61 @@ contract InvoiceEscrow is ReentrancyGuard {
         invoice.state = State.RefundRequested;
 
         emit RefundRequested(invoiceId, msg.sender, uint64(block.timestamp) + invoice.timeout);
+    }
+
+    function markDelivered(uint256 invoiceId, string calldata deliveryHash) external {
+        Invoice storage invoice = _invoice(invoiceId);
+        if (invoice.state != State.Paid && invoice.state != State.RefundRequested) {
+            revert InvalidState(State.Paid, invoice.state);
+        }
+        if (msg.sender != invoice.recipient) revert Unauthorized();
+
+        invoice.deliveryHash = deliveryHash;
+
+        emit DeliveryMarked(invoiceId, msg.sender, deliveryHash);
+    }
+
+    function proposeSettlement(
+        uint256 invoiceId,
+        uint256 recipientAmount,
+        string calldata memoHash
+    ) external {
+        Invoice storage invoice = _invoice(invoiceId);
+        if (invoice.state != State.Paid && invoice.state != State.RefundRequested) {
+            revert InvalidState(State.Paid, invoice.state);
+        }
+        if (msg.sender != invoice.payer && msg.sender != invoice.recipient) revert Unauthorized();
+        if (recipientAmount > invoice.amount) revert InvalidSettlementAmount();
+
+        invoice.settlementProposedBy = msg.sender;
+        invoice.settlementRecipientAmount = recipientAmount;
+        invoice.settlementProposedAt = uint64(block.timestamp);
+        invoice.settlementMemoHash = memoHash;
+
+        emit SettlementProposed(invoiceId, msg.sender, recipientAmount, invoice.amount - recipientAmount, memoHash);
+    }
+
+    function acceptSettlement(uint256 invoiceId) external nonReentrant {
+        Invoice storage invoice = _invoice(invoiceId);
+        if (invoice.state != State.Paid && invoice.state != State.RefundRequested) {
+            revert InvalidState(State.Paid, invoice.state);
+        }
+        if (invoice.settlementProposedBy == address(0)) revert NoSettlementProposal();
+        if (msg.sender != invoice.payer && msg.sender != invoice.recipient) revert Unauthorized();
+        if (msg.sender == invoice.settlementProposedBy) revert Unauthorized();
+
+        uint256 recipientAmount = invoice.settlementRecipientAmount;
+        uint256 payerAmount = invoice.amount - recipientAmount;
+        invoice.state = State.Settled;
+
+        if (recipientAmount != 0) {
+            _transferOut(invoice.token, invoice.recipient, recipientAmount);
+        }
+        if (payerAmount != 0) {
+            _transferOut(invoice.token, invoice.payer, payerAmount);
+        }
+
+        emit SettlementAccepted(invoiceId, msg.sender, recipientAmount, payerAmount);
     }
 
     function refund(uint256 invoiceId) external nonReentrant {

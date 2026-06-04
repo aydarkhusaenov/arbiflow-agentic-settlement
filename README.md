@@ -1,8 +1,8 @@
-# ArbiFlow Agentic Escrow
+# ArbiFlow Agentic Settlement
 
-Agent-assisted invoice escrow and payment settlement for Arbitrum.
+Agent-assisted invoice escrow, delivery evidence, and payment settlement for Arbitrum.
 
-ArbiFlow lets a merchant or freelancer create an on-chain invoice, lets a payer fund it into escrow, and guides both sides through release, refund request, timeout refund, and cancellation paths. The agent panel reads the live contract state and only recommends actions that match the contract state machine.
+ArbiFlow lets a merchant, freelancer, or autonomous service agent create an on-chain invoice, lets a payer fund it into escrow, and guides both sides through release, refund request, delivery evidence, timeout refund, and negotiated partial settlement paths. The agent panel reads the live contract state and only recommends actions that match the contract state machine.
 
 ## Hackathon Fit
 
@@ -10,7 +10,7 @@ ArbiFlow lets a merchant or freelancer create an on-chain invoice, lets a payer 
 - Chain target: Arbitrum Sepolia
 - Prize fit: Overall prize and Best Agentic Project
 - Core contract: `InvoiceEscrow`
-- Agent model: deterministic, state-aware, wallet-confirmed actions
+- Agent model: deterministic, state-aware, wallet-confirmed actions with optional room for LLM-generated explanations
 
 The official HackQuest page states that projects must be deployed on an Arbitrum chain to qualify. Arbitrum Sepolia is used to keep the expected deployment cost at `0 USD`.
 
@@ -29,6 +29,16 @@ pnpm install
 pnpm contracts:test
 pnpm build
 ```
+
+## What Makes It Strong
+
+- Trust-minimized escrow for real commercial invoices.
+- On-chain delivery evidence for off-chain work handoff.
+- Counterparty-approved partial settlements for disputes without a centralized arbitrator.
+- Timeout paths for inactive counterparties.
+- ETH and ERC20 support.
+- Agent panel that reads live contract state, wallet role, timing windows, evidence, and settlement proposals.
+- Contract tests for success, failure, authorization, timeout, and split-settlement paths.
 
 ## Local Contract Workflow
 
@@ -87,6 +97,7 @@ Open `http://localhost:3000`, connect a wallet on Arbitrum Sepolia, and paste th
 - Architecture doc: [docs/architecture.md](docs/architecture.md)
 - Security notes: [docs/security.md](docs/security.md)
 - HackQuest draft: [docs/submission.md](docs/submission.md)
+- Judge demo script: [docs/demo-script.md](docs/demo-script.md)
 
 ## No-Video Constraint
 

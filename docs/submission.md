@@ -2,31 +2,35 @@
 
 ## Project Title
 
-ArbiFlow Agentic Escrow
+ArbiFlow Agentic Settlement
 
 ## Tagline
 
-Agent-assisted invoice escrow and payment settlement deployed on Arbitrum.
+Agent-guided escrow, delivery evidence, and negotiated settlement rails for Arbitrum commerce.
 
 ## Short Description
 
-ArbiFlow is an Arbitrum Sepolia escrow app for freelancers, merchants, and clients. A merchant creates an invoice, a payer funds it into escrow, and both sides can move through release, refund request, timeout refund, and cancellation flows. The agent panel reads live contract state and recommends only safe next actions for the connected wallet.
+ArbiFlow is an Arbitrum Sepolia settlement app for freelancers, merchants, agencies, and autonomous service agents. A seller creates an invoice, a payer funds it into escrow, and both sides can move through release, refund request, delivery evidence, timeout refund, and counterparty-approved partial settlement. The agent panel reads live contract state and recommends only safe next actions for the connected wallet.
 
 ## Problem
 
-Small businesses and freelancers need payment assurance without relying on centralized marketplaces or manual reconciliation. Simple crypto transfers do not provide structured invoice state, refund handling, or clear next steps for non-expert users.
+Small businesses, freelancers, and AI-powered service providers increasingly sell work outside centralized marketplaces. They need payment assurance, delivery proof, refund handling, and dispute settlement without giving a platform custody over funds. Simple crypto transfers do not solve that: they have no invoice state, no delivery trail, no refund window, and no guided next step for non-expert users.
 
 ## Solution
 
-ArbiFlow turns a payment into a transparent on-chain invoice state machine. Funds are held in escrow, state transitions are explicit, and the frontend agent explains available wallet-confirmed actions. This makes payment settlement easier to verify and cheaper to run on Arbitrum.
+ArbiFlow turns a payment into a transparent on-chain settlement workflow. Funds are held in escrow, delivery evidence can be attached, either side can propose a partial split settlement, and only the counterparty can accept that split. The agent reads the live contract state, wallet role, timing windows, evidence, and proposal data, then explains the exact wallet-confirmed actions available.
+
+The result is not a generic escrow demo. It is a compact settlement desk for real commercial workflows: pay, prove delivery, release, request refund, negotiate a split, accept settlement, or rely on timeout protection if a counterparty disappears.
 
 ## Why Arbitrum
 
-Arbitrum provides low-cost EVM execution and mature Solidity tooling, which is well suited for frequent payment and escrow actions. The buildathon deployment target is Arbitrum Sepolia, with a clear path to Arbitrum One for production.
+Arbitrum provides low-cost EVM execution and mature Solidity tooling, which is well suited for frequent payment, evidence, and settlement actions. The buildathon deployment target is Arbitrum Sepolia, with a clear path to Arbitrum One for production.
 
 ## Agentic Feature
 
-The agent reads the deployed contract state, the connected wallet role, invoice timing, and current state. It recommends whether the wallet can pay, cancel, release, request a refund, approve a refund, or wait for timeout. It never bypasses wallet confirmation and never overrides contract authorization.
+The agent reads the deployed contract state, connected wallet role, invoice timing, delivery evidence, refund window, and settlement proposal. It recommends whether the wallet can pay, cancel, release, request a refund, attach delivery evidence, propose a split, accept a counterparty proposal, approve a refund, or wait for timeout.
+
+The agent is deliberately safe: it does not sign transactions, custody funds, or invent authorization. The smart contract enforces the state machine. The agent makes the workflow understandable and reduces user error.
 
 ## Judging Criteria Mapping
 
@@ -37,22 +41,25 @@ Smart contract quality:
 - OpenZeppelin `SafeERC20`.
 - Custom errors.
 - No admin withdrawal path.
-- Tests for success and failure paths.
+- Counterparty-approved settlement split.
+- Tests for success, failure, timeout, authorization, ETH, ERC20, and split-settlement paths.
 
 Product-market fit:
 
-- Freelancers, agencies, merchants, and clients need escrow-backed invoice settlement.
-- Low Arbitrum fees make smaller invoice workflows practical.
+- Freelancers, agencies, merchants, AI agents, and clients need escrow-backed invoice settlement.
+- Low Arbitrum fees make small commercial workflows practical.
+- Delivery evidence plus negotiated settlement maps to real service work better than a simple transfer.
 
 Innovation and creativity:
 
-- Combines escrow payments with state-aware agent UX.
+- Combines escrow payments, delivery proof, refund windows, and partial compromise settlements.
 - Agent recommendations are based on live contract state, not generic help text.
+- No centralized arbitrator is required for negotiated settlement.
 
 Real problem solving:
 
-- Reduces payment uncertainty.
-- Gives both sides transparent release/refund paths.
+- Reduces payment uncertainty and manual reconciliation.
+- Gives both sides transparent release, refund, evidence, and settlement paths.
 - Keeps custody and authorization in the smart contract.
 
 ## Links To Fill

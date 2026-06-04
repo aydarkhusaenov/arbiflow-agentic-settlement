@@ -8,6 +8,7 @@
 - State changes happen before outbound transfers.
 - ERC20 transfers use OpenZeppelin `SafeERC20`.
 - Invalid calls use custom errors.
+- Partial settlements require a proposal from one counterparty and acceptance by the other.
 
 ## Authorization
 
@@ -17,6 +18,9 @@
 - Payer can request a refund while invoice is paid.
 - Recipient can approve refund immediately after request.
 - Payer can claim refund only after refund timeout.
+- Recipient can attach delivery evidence while an invoice is paid or refund-requested.
+- Payer or recipient can propose a partial split settlement while an invoice is paid or refund-requested.
+- Only the non-proposing counterparty can accept a settlement proposal.
 
 ## Test Coverage
 
@@ -38,9 +42,16 @@ Tests cover:
 - payer timeout refund
 - ERC20 pay and release path
 - ETH value rejection on ERC20 invoice
+- delivery evidence authorization
+- delivery evidence after refund request
+- negotiated ETH split settlement
+- proposer cannot accept their own settlement
+- invalid settlement state, caller, and amount
+- negotiated ERC20 split settlement
 
 ## Residual Risks
 
 - ERC20 frontend flow assumes prior token approval for custom ERC20 invoices.
 - Metadata is stored as a string reference and is not validated on-chain.
-- No arbitration layer is included; the timeout workflow is intentionally simple for hackathon scope.
+- Settlement memos and delivery evidence are off-chain references; the contract enforces consent and payouts, not truthfulness of external files.
+- No centralized arbitration layer is included by design; compromise settlement is counterparty-approved.

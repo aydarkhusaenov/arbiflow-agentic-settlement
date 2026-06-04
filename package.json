@@ -2,7 +2,7 @@
   "name": "arbiflow-agentic-escrow",
   "version": "0.1.0",
   "private": true,
-  "description": "Agent-assisted invoice escrow and payment settlement deployed on Arbitrum.",
+  "description": "Agent-assisted invoice escrow, delivery evidence, and payment settlement deployed on Arbitrum.",
   "scripts": {
     "build": "pnpm --filter @arbiflow/app build",
     "dev": "pnpm --filter @arbiflow/app dev",

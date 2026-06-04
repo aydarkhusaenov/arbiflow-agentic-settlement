@@ -175,6 +175,34 @@ describe("InvoiceEscrow", function () {
     expect(invoice.state).to.equal(4);
   });
 
+  it("lets recipient attach delivery evidence while funds are escrowed", async function () {
+    const { id, params } = await createEthInvoice();
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+
+    await expect(escrow.connect(other).markDelivered(id, "ipfs://delivery-proof")).to.be.revertedWithCustomError(
+      escrow,
+      "Unauthorized"
+    );
+
+    await expect(escrow.connect(recipient).markDelivered(id, "ipfs://delivery-proof"))
+      .to.emit(escrow, "DeliveryMarked")
+      .withArgs(id, recipient.address, "ipfs://delivery-proof");
+
+    const invoice = await escrow.getInvoice(id);
+    expect(invoice.deliveryHash).to.equal("ipfs://delivery-proof");
+  });
+
+  it("lets recipient attach delivery evidence after refund request", async function () {
+    const { id, params } = await createEthInvoice();
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+    await escrow.connect(payer).requestRefund(id);
+
+    await escrow.connect(recipient).markDelivered(id, "ipfs://late-delivery-proof");
+
+    const invoice = await escrow.getInvoice(id);
+    expect(invoice.deliveryHash).to.equal("ipfs://late-delivery-proof");
+  });
+
   it("prevents timeout refund before waiting period", async function () {
     const { id, params } = await createEthInvoice({ timeout: HOUR });
     await escrow.connect(payer).payInvoice(id, { value: params.amount });
@@ -198,6 +226,66 @@ describe("InvoiceEscrow", function () {
     expect(invoice.state).to.equal(4);
   });
 
+  it("supports negotiated ETH settlement with partial recipient payout", async function () {
+    const { id, params } = await createEthInvoice();
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+
+    const recipientAmount = ethers.parseEther("0.7");
+    const payerAmount = params.amount - recipientAmount;
+
+    await expect(escrow.connect(payer).proposeSettlement(id, recipientAmount, "ipfs://settlement-70-30"))
+      .to.emit(escrow, "SettlementProposed")
+      .withArgs(id, payer.address, recipientAmount, payerAmount, "ipfs://settlement-70-30");
+
+    let invoice = await escrow.getInvoice(id);
+    expect(invoice.settlementProposedBy).to.equal(payer.address);
+    expect(invoice.settlementRecipientAmount).to.equal(recipientAmount);
+    expect(invoice.settlementMemoHash).to.equal("ipfs://settlement-70-30");
+
+    await expect(() => escrow.connect(recipient).acceptSettlement(id)).to.changeEtherBalances(
+      [await escrow.getAddress(), recipient.address, payer.address],
+      [-params.amount, recipientAmount, payerAmount]
+    );
+
+    invoice = await escrow.getInvoice(id);
+    expect(invoice.state).to.equal(6);
+  });
+
+  it("prevents proposer from accepting their own settlement proposal", async function () {
+    const { id, params } = await createEthInvoice();
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+    await escrow.connect(recipient).proposeSettlement(id, ethers.parseEther("0.8"), "ipfs://recipient-proposal");
+
+    await expect(escrow.connect(recipient).acceptSettlement(id)).to.be.revertedWithCustomError(escrow, "Unauthorized");
+    await escrow.connect(payer).acceptSettlement(id);
+
+    const invoice = await escrow.getInvoice(id);
+    expect(invoice.state).to.equal(6);
+  });
+
+  it("validates settlement proposal state, caller, and amount", async function () {
+    const { id, params } = await createEthInvoice();
+
+    await expect(
+      escrow.connect(payer).proposeSettlement(id, params.amount, "ipfs://too-early")
+    ).to.be.revertedWithCustomError(escrow, "InvalidState");
+
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+
+    await expect(
+      escrow.connect(other).proposeSettlement(id, params.amount, "ipfs://bad-caller")
+    ).to.be.revertedWithCustomError(escrow, "Unauthorized");
+
+    await expect(
+      escrow.connect(payer).proposeSettlement(id, params.amount + 1n, "ipfs://too-large")
+    ).to.be.revertedWithCustomError(escrow, "InvalidSettlementAmount");
+
+    await expect(escrow.connect(payer).acceptSettlement(id)).to.be.revertedWithCustomError(
+      escrow,
+      "NoSettlementProposal"
+    );
+  });
+
   it("handles ERC20 pay and release path", async function () {
     const amount = ethers.parseUnits("250", 18);
     await token.mint(payer.address, amount);
@@ -215,6 +303,30 @@ describe("InvoiceEscrow", function () {
 
     await escrow.connect(payer).release(id);
     expect(await token.balanceOf(recipient.address)).to.equal(amount);
+  });
+
+  it("handles ERC20 negotiated settlement split", async function () {
+    const amount = ethers.parseUnits("300", 18);
+    await token.mint(payer.address, amount);
+
+    const now = await latestTimestamp();
+    const tx = await escrow
+      .connect(creator)
+      .createInvoice(recipient.address, await token.getAddress(), amount, "ipfs://erc20-settlement", now + DAY, DAY);
+    const receipt = await tx.wait();
+    const id = receipt.logs.find((log) => log.fragment && log.fragment.name === "InvoiceCreated").args.invoiceId;
+
+    await token.connect(payer).approve(await escrow.getAddress(), amount);
+    await escrow.connect(payer).payInvoice(id);
+
+    const recipientAmount = ethers.parseUnits("225", 18);
+    const payerAmount = amount - recipientAmount;
+    await escrow.connect(recipient).proposeSettlement(id, recipientAmount, "ipfs://erc20-split");
+    await escrow.connect(payer).acceptSettlement(id);
+
+    expect(await token.balanceOf(recipient.address)).to.equal(recipientAmount);
+    expect(await token.balanceOf(payer.address)).to.equal(payerAmount);
+    expect(await token.balanceOf(await escrow.getAddress())).to.equal(0);
   });
 
   it("rejects ETH value on ERC20 invoice", async function () {

@@ -28,6 +28,12 @@ RefundRequested
   v
 Refunded
 
+Paid or RefundRequested
+  | proposeSettlement by payer or recipient
+  | acceptSettlement by counterparty
+  v
+Settled
+
 Created
   | cancelUnpaid by creator or recipient
   v
@@ -45,8 +51,13 @@ Cancelled
 - `paidAt`: timestamp when escrow was funded.
 - `timeout`: waiting period for recipient timeout release or payer timeout refund.
 - `refundRequestedAt`: timestamp when refund flow opened.
+- `settlementProposedAt`: timestamp when a compromise split was proposed.
 - `state`: explicit invoice state.
 - `metadataHash`: off-chain invoice metadata reference.
+- `deliveryHash`: off-chain delivery/evidence reference.
+- `settlementMemoHash`: off-chain settlement reasoning reference.
+- `settlementProposedBy`: payer or recipient that proposed the split.
+- `settlementRecipientAmount`: amount paid to recipient if counterparty accepts settlement.
 
 ## Agent Layer
 
@@ -65,8 +76,14 @@ It then produces:
 - allowed wallet actions
 - disabled action reasons
 - settlement timing notes
+- delivery evidence status
+- split settlement recommendations and counterparty acceptance guidance
 
 The agent does not sign transactions, custody funds, or decide authorization. All authorization stays in the smart contract and every state-changing action requires wallet confirmation.
+
+## Settlement Design
+
+ArbiFlow deliberately avoids an admin arbitrator. If delivery is disputed, payer or recipient can propose a split settlement. The proposal stores the recipient payout, payer refund, proposer, timestamp, and memo hash. Only the counterparty can accept the proposal. This gives the product a practical dispute-resolution path while preserving user custody and contract-enforced consent.
 
 ## Arbitrum Fit
 

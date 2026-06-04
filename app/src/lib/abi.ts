@@ -26,8 +26,13 @@ export const invoiceEscrowAbi = [
           { name: "paidAt", type: "uint64", internalType: "uint64" },
           { name: "timeout", type: "uint64", internalType: "uint64" },
           { name: "refundRequestedAt", type: "uint64", internalType: "uint64" },
+          { name: "settlementProposedAt", type: "uint64", internalType: "uint64" },
           { name: "state", type: "uint8", internalType: "enum InvoiceEscrow.State" },
-          { name: "metadataHash", type: "string", internalType: "string" }
+          { name: "metadataHash", type: "string", internalType: "string" },
+          { name: "deliveryHash", type: "string", internalType: "string" },
+          { name: "settlementMemoHash", type: "string", internalType: "string" },
+          { name: "settlementProposedBy", type: "address", internalType: "address" },
+          { name: "settlementRecipientAmount", type: "uint256", internalType: "uint256" }
         ]
       }
     ]
@@ -63,6 +68,34 @@ export const invoiceEscrowAbi = [
   {
     type: "function",
     name: "requestRefund",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "invoiceId", type: "uint256", internalType: "uint256" }],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "markDelivered",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "invoiceId", type: "uint256", internalType: "uint256" },
+      { name: "deliveryHash", type: "string", internalType: "string" }
+    ],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "proposeSettlement",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "invoiceId", type: "uint256", internalType: "uint256" },
+      { name: "recipientAmount", type: "uint256", internalType: "uint256" },
+      { name: "memoHash", type: "string", internalType: "string" }
+    ],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "acceptSettlement",
     stateMutability: "nonpayable",
     inputs: [{ name: "invoiceId", type: "uint256", internalType: "uint256" }],
     outputs: []

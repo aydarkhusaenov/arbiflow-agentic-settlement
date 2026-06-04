@@ -17,7 +17,7 @@ import {
   Wallet
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { formatEther, isAddress, parseEther, zeroAddress } from "viem";
+import { formatEther, isAddress, parseEther, parseUnits, zeroAddress } from "viem";
 import {
   useAccount,
   useChainId,
@@ -39,6 +39,7 @@ const HOUR = 60 * 60;
 type CreateForm = {
   recipient: string;
   token: string;
+  tokenDecimals: string;
   amount: string;
   metadataHash: string;
   dueDays: string;
@@ -48,6 +49,7 @@ type CreateForm = {
 const defaultForm: CreateForm = {
   recipient: "",
   token: "",
+  tokenDecimals: "18",
   amount: "0.05",
   metadataHash: "ipfs://arbiflow-invoice-demo",
   dueDays: "7",
@@ -69,6 +71,9 @@ export default function Home() {
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<`0x${string}` | null>(null);
   const [txError, setTxError] = useState("");
+  const [deliveryHash, setDeliveryHash] = useState("ipfs://arbiflow-delivery-proof");
+  const [settlementAmount, setSettlementAmount] = useState("");
+  const [settlementMemoHash, setSettlementMemoHash] = useState("ipfs://arbiflow-settlement-plan");
 
   useEffect(() => {
     const storedAddress = window.localStorage.getItem("arbiflow-contract-address");
@@ -140,6 +145,27 @@ export default function Home() {
   const assessment = selectedInvoice ? assessInvoice(selectedInvoice, address) : null;
   const wrongChain = isConnected && chainId !== arbitrumSepolia.id && chainId !== hardhat.id;
   const explorerBase = chainId === hardhat.id ? "" : "https://sepolia.arbiscan.io";
+  const selectedInvoiceId = selectedInvoice?.id.toString();
+  const isSelectedActive = selectedInvoice ? selectedInvoice.state === 1 || selectedInvoice.state === 2 : false;
+  const isSelectedRecipient = Boolean(
+    selectedInvoice && address && selectedInvoice.recipient.toLowerCase() === address.toLowerCase()
+  );
+  const isSelectedPayer = Boolean(selectedInvoice && address && selectedInvoice.payer.toLowerCase() === address.toLowerCase());
+  const canProposeSettlement = Boolean(selectedInvoice && isSelectedActive && (isSelectedRecipient || isSelectedPayer));
+  const settlementOpen = Boolean(selectedInvoice && selectedInvoice.settlementProposedBy !== zeroAddress);
+  const canAcceptSettlement = Boolean(
+    selectedInvoice &&
+      settlementOpen &&
+      (isSelectedRecipient || isSelectedPayer) &&
+      address &&
+      selectedInvoice.settlementProposedBy.toLowerCase() !== address.toLowerCase()
+  );
+
+  useEffect(() => {
+    if (!selectedInvoice) return;
+    const suggested = (selectedInvoice.amount * 8n) / 10n;
+    setSettlementAmount(trimDecimal(formatEther(suggested)));
+  }, [selectedInvoiceId]);
 
   function updateContractAddress(nextAddress: string) {
     setAddressOverride(nextAddress);
@@ -172,7 +198,12 @@ export default function Home() {
 
     let amount: bigint;
     try {
-      amount = parseEther(form.amount || "0");
+      const parsedDecimals = Number(form.tokenDecimals || "18");
+      const tokenDecimals = Number.isFinite(parsedDecimals) ? Math.min(36, Math.max(0, Math.round(parsedDecimals))) : 18;
+      amount =
+        token === zeroAddress
+          ? parseEther(form.amount || "0")
+          : parseUnits(form.amount || "0", tokenDecimals);
     } catch {
       setTxError("Amount is invalid.");
       return;
@@ -210,7 +241,35 @@ export default function Home() {
       await runWrite("refund", [invoice.id]);
       return;
     }
+    if (action === "acceptSettlement") {
+      await runWrite("acceptSettlement", [invoice.id]);
+      return;
+    }
     await runWrite("cancelUnpaid", [invoice.id]);
+  }
+
+  async function submitDelivery(invoice: InvoiceRecord) {
+    const evidence = deliveryHash.trim();
+    if (!evidence) {
+      setTxError("Delivery evidence hash is required.");
+      return;
+    }
+    await runWrite("markDelivered", [invoice.id, evidence]);
+  }
+
+  async function submitSettlement(invoice: InvoiceRecord) {
+    let recipientAmount: bigint;
+    try {
+      recipientAmount = parseEther(settlementAmount || "0");
+    } catch {
+      setTxError("Settlement amount is invalid.");
+      return;
+    }
+    if (recipientAmount > invoice.amount) {
+      setTxError("Settlement recipient amount cannot exceed invoice amount.");
+      return;
+    }
+    await runWrite("proposeSettlement", [invoice.id, recipientAmount, settlementMemoHash || "ipfs://arbiflow-settlement"]);
   }
 
   async function runWrite(functionName: string, args: readonly unknown[], value?: bigint) {
@@ -346,6 +405,16 @@ export default function Home() {
             </label>
 
             <label>
+              Decimals
+              <input
+                value={form.tokenDecimals}
+                onChange={(event) => setForm({ ...form, tokenDecimals: event.target.value })}
+                inputMode="numeric"
+                placeholder="18"
+              />
+            </label>
+
+            <label>
               Metadata
               <input
                 value={form.metadataHash}
@@ -449,6 +518,14 @@ export default function Home() {
                   <dt>Timeout</dt>
                   <dd>{formatDuration(selectedInvoice.timeout)}</dd>
                 </div>
+                <div>
+                  <dt>Delivery</dt>
+                  <dd>{selectedInvoice.deliveryHash ? "attached" : "missing"}</dd>
+                </div>
+                <div>
+                  <dt>Settlement</dt>
+                  <dd>{settlementOpen ? "proposed" : "none"}</dd>
+                </div>
               </dl>
 
               <div className="actionStack">
@@ -466,6 +543,77 @@ export default function Home() {
                   </button>
                 ))}
               </div>
+
+              <section className="settlementDesk" aria-label="Settlement tools">
+                <label>
+                  Delivery evidence
+                  <input
+                    value={deliveryHash}
+                    onChange={(event) => setDeliveryHash(event.target.value)}
+                    placeholder="ipfs://delivery-proof"
+                    spellCheck={false}
+                  />
+                </label>
+                <button
+                  className="button action"
+                  type="button"
+                  disabled={!isConnected || !isSelectedRecipient || !isSelectedActive || Boolean(pendingAction)}
+                  title="Recipient can attach delivery evidence while the invoice is paid or refund requested."
+                  onClick={() => submitDelivery(selectedInvoice)}
+                >
+                  {pendingAction === "markDelivered" ? <Loader2 className="spin" aria-hidden /> : <CheckCircle2 aria-hidden />}
+                  Mark delivered
+                </button>
+
+                <div className="splitInputs">
+                  <label>
+                    Recipient payout
+                    <input
+                      value={settlementAmount}
+                      onChange={(event) => setSettlementAmount(event.target.value)}
+                      inputMode="decimal"
+                      placeholder="0.04"
+                    />
+                  </label>
+                  <label>
+                    Memo
+                    <input
+                      value={settlementMemoHash}
+                      onChange={(event) => setSettlementMemoHash(event.target.value)}
+                      placeholder="ipfs://settlement-plan"
+                      spellCheck={false}
+                    />
+                  </label>
+                </div>
+
+                <button
+                  className="button action"
+                  type="button"
+                  disabled={!isConnected || !canProposeSettlement || Boolean(pendingAction)}
+                  title="Payer or recipient can propose a split settlement for the counterparty to accept."
+                  onClick={() => submitSettlement(selectedInvoice)}
+                >
+                  {pendingAction === "proposeSettlement" ? <Loader2 className="spin" aria-hidden /> : <Send aria-hidden />}
+                  Propose split
+                </button>
+
+                {settlementOpen ? (
+                  <div className="proposalBox">
+                    <span>Open split proposal</span>
+                    <strong>{formatSettlement(selectedInvoice)}</strong>
+                    <button
+                      className="button primary"
+                      type="button"
+                      disabled={!isConnected || !canAcceptSettlement || Boolean(pendingAction)}
+                      title="Only the counterparty can accept a settlement proposal."
+                      onClick={() => runWrite("acceptSettlement", [selectedInvoice.id])}
+                    >
+                      {pendingAction === "acceptSettlement" ? <Loader2 className="spin" aria-hidden /> : <CheckCircle2 aria-hidden />}
+                      Accept split
+                    </button>
+                  </div>
+                ) : null}
+              </section>
 
               <ul className="agentNotes">
                 {assessment.notes.map((note) => (
@@ -524,6 +672,7 @@ function actionIcon(action: AgentAction["id"], pendingAction: string | null) {
   if (spinning) return <Loader2 className="spin" aria-hidden />;
   if (action === "pay") return <Send aria-hidden />;
   if (action === "release") return <CheckCircle2 aria-hidden />;
+  if (action === "acceptSettlement") return <CheckCircle2 aria-hidden />;
   if (action === "requestRefund") return <Undo2 aria-hidden />;
   if (action === "refund") return <RotateCcw aria-hidden />;
   return <Ban aria-hidden />;
@@ -542,8 +691,15 @@ function toInvoiceRecord(id: bigint, raw: unknown): InvoiceRecord {
     paidAt: BigInt(value.paidAt as bigint | string | number | undefined ?? (value[6] as bigint)),
     timeout: BigInt(value.timeout as bigint | string | number | undefined ?? (value[7] as bigint)),
     refundRequestedAt: BigInt(value.refundRequestedAt as bigint | string | number | undefined ?? (value[8] as bigint)),
-    state: Number(value.state ?? value[9]),
-    metadataHash: String(value.metadataHash ?? value[10] ?? "")
+    settlementProposedAt: BigInt(value.settlementProposedAt as bigint | string | number | undefined ?? (value[9] as bigint)),
+    state: Number(value.state ?? value[10]),
+    metadataHash: String(value.metadataHash ?? value[11] ?? ""),
+    deliveryHash: String(value.deliveryHash ?? value[12] ?? ""),
+    settlementMemoHash: String(value.settlementMemoHash ?? value[13] ?? ""),
+    settlementProposedBy: (value.settlementProposedBy ?? value[14] ?? zeroAddress) as `0x${string}`,
+    settlementRecipientAmount: BigInt(
+      value.settlementRecipientAmount as bigint | string | number | undefined ?? (value[15] as bigint | undefined) ?? 0n
+    )
   };
 }
 
@@ -556,6 +712,13 @@ function shortAddress(value?: string) {
 function formatAmount(invoice: InvoiceRecord) {
   const suffix = invoice.token === zeroAddress ? "ETH" : "TOKEN";
   return `${trimDecimal(formatEther(invoice.amount))} ${suffix}`;
+}
+
+function formatSettlement(invoice: InvoiceRecord) {
+  const recipient = trimDecimal(formatEther(invoice.settlementRecipientAmount));
+  const payer = trimDecimal(formatEther(invoice.amount - invoice.settlementRecipientAmount));
+  const suffix = invoice.token === zeroAddress ? "ETH" : "TOKEN";
+  return `${recipient} ${suffix} to recipient, ${payer} ${suffix} back`;
 }
 
 function formatTimestamp(value: bigint) {
