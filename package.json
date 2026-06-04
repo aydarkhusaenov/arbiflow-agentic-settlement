@@ -1,0 +1,21 @@
+{
+  "name": "arbiflow-agentic-escrow",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent-assisted invoice escrow and payment settlement deployed on Arbitrum.",
+  "scripts": {
+    "build": "pnpm --filter @arbiflow/app build",
+    "dev": "pnpm --filter @arbiflow/app dev",
+    "contracts:compile": "pnpm --filter @arbiflow/contracts compile",
+    "contracts:deploy:arbitrum-sepolia": "pnpm --filter @arbiflow/contracts deploy:arbitrum-sepolia",
+    "contracts:test": "pnpm --filter @arbiflow/contracts test",
+    "test": "pnpm --filter @arbiflow/contracts test && pnpm --filter @arbiflow/app build"
+  },
+  "keywords": [
+    "arbitrum",
+    "escrow",
+    "agent",
+    "hackathon"
+  ],
+  "license": "MIT"
+}
