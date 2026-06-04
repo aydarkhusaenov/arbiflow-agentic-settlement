@@ -34,6 +34,11 @@ Paid or RefundRequested
   v
 Settled
 
+Created, Paid, or RefundRequested
+  | attachAgentMandate by creator, recipient, or payer
+  v
+AgentContext attached
+
 Created
   | cancelUnpaid by creator or recipient
   v
@@ -58,6 +63,19 @@ Cancelled
 - `settlementMemoHash`: off-chain settlement reasoning reference.
 - `settlementProposedBy`: payer or recipient that proposed the split.
 - `settlementRecipientAmount`: amount paid to recipient if counterparty accepts settlement.
+
+## Agent Context
+
+Each invoice can carry a lightweight agent accountability layer:
+
+- `payerAgentHash`: hash of payer agent identity reference, wallet policy, or ERC-8004-style agent pointer.
+- `recipientAgentHash`: hash of service agent identity reference.
+- `mandateHash`: hash of a signed user mandate or payment instruction.
+- `policyHash`: hash of agent risk controls, release conditions, or tool policy.
+- `slaDeadline`: service-level deadline used by the agent panel.
+- `attachedBy`: account that attached the context.
+
+This keeps the contract independent from any one registry while creating a deterministic bridge to agent identity, reputation, and signed mandate systems.
 
 ## Agent Layer
 
@@ -84,6 +102,18 @@ The agent does not sign transactions, custody funds, or decide authorization. Al
 ## Settlement Design
 
 ArbiFlow deliberately avoids an admin arbitrator. If delivery is disputed, payer or recipient can propose a split settlement. The proposal stores the recipient payout, payer refund, proposer, timestamp, and memo hash. Only the counterparty can accept the proposal. This gives the product a practical dispute-resolution path while preserving user custody and contract-enforced consent.
+
+## Portable Receipt
+
+`settlementReceiptHash(invoiceId)` returns a deterministic hash over:
+
+- chain and contract address
+- invoice parties, token, amount, and final state
+- metadata, delivery evidence, and settlement memo
+- split-settlement payout
+- agent hashes, mandate hash, policy hash, and SLA deadline
+
+When an invoice closes through release, refund, cancellation, or settlement, the contract emits `SettlementReceiptFinalized`. This creates a compact receipt that can be indexed now and later attached to reputation systems or validator flows.
 
 ## Arbitrum Fit
 

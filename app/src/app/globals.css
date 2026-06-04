@@ -478,7 +478,8 @@ a:focus-visible {
   padding: 0 16px 16px;
 }
 
-.settlementDesk {
+.settlementDesk,
+.mandateDesk {
   display: grid;
   gap: 10px;
   margin: 0 16px 16px;
@@ -488,7 +489,8 @@ a:focus-visible {
   background: #fbfcfe;
 }
 
-.settlementDesk label {
+.settlementDesk label,
+.mandateDesk label {
   display: grid;
   gap: 6px;
   min-width: 0;
@@ -520,6 +522,11 @@ a:focus-visible {
 }
 
 .proposalBox strong {
+  overflow-wrap: anywhere;
+}
+
+.proposalBox small {
+  color: var(--muted);
   overflow-wrap: anywhere;
 }
 

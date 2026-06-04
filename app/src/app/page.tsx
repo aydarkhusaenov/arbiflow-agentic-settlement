@@ -17,7 +17,7 @@ import {
   Wallet
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { formatEther, isAddress, parseEther, parseUnits, zeroAddress } from "viem";
+import { formatEther, isAddress, keccak256, parseEther, parseUnits, toBytes, zeroAddress, zeroHash } from "viem";
 import {
   useAccount,
   useChainId,
@@ -30,7 +30,7 @@ import {
   useWriteContract
 } from "wagmi";
 import { arbitrumSepolia, hardhat } from "wagmi/chains";
-import { assessInvoice, AgentAction, InvoiceRecord, stateLabels } from "@/lib/agent";
+import { assessInvoice, AgentAction, AgentContextRecord, InvoiceRecord, stateLabels } from "@/lib/agent";
 import { invoiceEscrowAbi } from "@/lib/abi";
 
 const DAY = 24 * 60 * 60;
@@ -46,6 +46,14 @@ type CreateForm = {
   timeoutHours: string;
 };
 
+type MandateForm = {
+  payerAgent: string;
+  recipientAgent: string;
+  mandate: string;
+  policy: string;
+  slaHours: string;
+};
+
 const defaultForm: CreateForm = {
   recipient: "",
   token: "",
@@ -54,6 +62,14 @@ const defaultForm: CreateForm = {
   metadataHash: "ipfs://arbiflow-invoice-demo",
   dueDays: "7",
   timeoutHours: "72"
+};
+
+const defaultMandateForm: MandateForm = {
+  payerAgent: "erc8004:payer-agent:max-spend-and-refund-rights",
+  recipientAgent: "erc8004:service-agent:delivery-proof-required",
+  mandate: "Pay for the invoice only under the attached metadata, delivery evidence, and settlement rules.",
+  policy: "Release on buyer confirmation, attach evidence for disputes, allow counterparty-approved split settlement.",
+  slaHours: "72"
 };
 
 export default function Home() {
@@ -66,6 +82,7 @@ export default function Home() {
   const { writeContractAsync } = useWriteContract();
 
   const [form, setForm] = useState<CreateForm>(defaultForm);
+  const [mandateForm, setMandateForm] = useState<MandateForm>(defaultMandateForm);
   const [selectedId, setSelectedId] = useState<bigint | null>(null);
   const [addressOverride, setAddressOverride] = useState("");
   const [pendingAction, setPendingAction] = useState<string | null>(null);
@@ -142,7 +159,31 @@ export default function Home() {
   }, [invoices, selectedId]);
 
   const selectedInvoice = invoices.find((invoice) => invoice.id === selectedId) ?? invoices[0];
-  const assessment = selectedInvoice ? assessInvoice(selectedInvoice, address) : null;
+
+  const {
+    data: selectedAgentContextData,
+    refetch: refetchAgentContext
+  } = useReadContract({
+    address: contractAddress,
+    abi: invoiceEscrowAbi,
+    functionName: "getAgentContext",
+    args: selectedInvoice ? [selectedInvoice.id] : undefined,
+    query: { enabled: Boolean(contractAddress && selectedInvoice) }
+  });
+
+  const {
+    data: selectedReceiptHash,
+    refetch: refetchReceiptHash
+  } = useReadContract({
+    address: contractAddress,
+    abi: invoiceEscrowAbi,
+    functionName: "settlementReceiptHash",
+    args: selectedInvoice ? [selectedInvoice.id] : undefined,
+    query: { enabled: Boolean(contractAddress && selectedInvoice) }
+  });
+
+  const selectedAgentContext = selectedAgentContextData ? toAgentContextRecord(selectedAgentContextData) : undefined;
+  const assessment = selectedInvoice ? assessInvoice(selectedInvoice, address, undefined, selectedAgentContext, selectedReceiptHash) : null;
   const wrongChain = isConnected && chainId !== arbitrumSepolia.id && chainId !== hardhat.id;
   const explorerBase = chainId === hardhat.id ? "" : "https://sepolia.arbiscan.io";
   const selectedInvoiceId = selectedInvoice?.id.toString();
@@ -153,6 +194,7 @@ export default function Home() {
   const isSelectedPayer = Boolean(selectedInvoice && address && selectedInvoice.payer.toLowerCase() === address.toLowerCase());
   const canProposeSettlement = Boolean(selectedInvoice && isSelectedActive && (isSelectedRecipient || isSelectedPayer));
   const settlementOpen = Boolean(selectedInvoice && selectedInvoice.settlementProposedBy !== zeroAddress);
+  const mandateAttached = Boolean(selectedAgentContext && selectedAgentContext.mandateHash !== zeroHash);
   const canAcceptSettlement = Boolean(
     selectedInvoice &&
       settlementOpen &&
@@ -175,6 +217,8 @@ export default function Home() {
   async function refreshAll() {
     await refetchCount();
     await refetchInvoices();
+    await refetchAgentContext();
+    await refetchReceiptHash();
   }
 
   async function submitCreate(event: FormEvent<HTMLFormElement>) {
@@ -270,6 +314,24 @@ export default function Home() {
       return;
     }
     await runWrite("proposeSettlement", [invoice.id, recipientAmount, settlementMemoHash || "ipfs://arbiflow-settlement"]);
+  }
+
+  async function submitMandate(invoice: InvoiceRecord) {
+    const mandate = mandateForm.mandate.trim();
+    if (!mandate) {
+      setTxError("Agent mandate text or hash is required.");
+      return;
+    }
+    const slaHours = Math.max(0, Number(mandateForm.slaHours || "0"));
+    const slaDeadline = BigInt(Math.floor(Date.now() / 1000) + Math.round(slaHours * HOUR));
+    await runWrite("attachAgentMandate", [
+      invoice.id,
+      hashOrZero(mandateForm.payerAgent),
+      hashOrZero(mandateForm.recipientAgent),
+      hashText(mandate),
+      hashOrZero(mandateForm.policy),
+      slaDeadline
+    ]);
   }
 
   async function runWrite(functionName: string, args: readonly unknown[], value?: bigint) {
@@ -526,6 +588,14 @@ export default function Home() {
                   <dt>Settlement</dt>
                   <dd>{settlementOpen ? "proposed" : "none"}</dd>
                 </div>
+                <div>
+                  <dt>Mandate</dt>
+                  <dd>{mandateAttached ? "attached" : "missing"}</dd>
+                </div>
+                <div>
+                  <dt>Receipt</dt>
+                  <dd>{selectedReceiptHash ? shortHash(selectedReceiptHash) : "pending"}</dd>
+                </div>
               </dl>
 
               <div className="actionStack">
@@ -543,6 +613,71 @@ export default function Home() {
                   </button>
                 ))}
               </div>
+
+              <section className="mandateDesk" aria-label="Agent mandate">
+                <label>
+                  Payer agent
+                  <input
+                    value={mandateForm.payerAgent}
+                    onChange={(event) => setMandateForm({ ...mandateForm, payerAgent: event.target.value })}
+                    placeholder="erc8004:payer-agent"
+                    spellCheck={false}
+                  />
+                </label>
+                <label>
+                  Service agent
+                  <input
+                    value={mandateForm.recipientAgent}
+                    onChange={(event) => setMandateForm({ ...mandateForm, recipientAgent: event.target.value })}
+                    placeholder="erc8004:service-agent"
+                    spellCheck={false}
+                  />
+                </label>
+                <label>
+                  Mandate
+                  <input
+                    value={mandateForm.mandate}
+                    onChange={(event) => setMandateForm({ ...mandateForm, mandate: event.target.value })}
+                    placeholder="signed payment intent or 0x hash"
+                    spellCheck={false}
+                  />
+                </label>
+                <label>
+                  Policy
+                  <input
+                    value={mandateForm.policy}
+                    onChange={(event) => setMandateForm({ ...mandateForm, policy: event.target.value })}
+                    placeholder="agent risk policy or 0x hash"
+                    spellCheck={false}
+                  />
+                </label>
+                <label>
+                  SLA hours
+                  <input
+                    value={mandateForm.slaHours}
+                    onChange={(event) => setMandateForm({ ...mandateForm, slaHours: event.target.value })}
+                    inputMode="decimal"
+                    placeholder="72"
+                  />
+                </label>
+                <button
+                  className="button action"
+                  type="button"
+                  disabled={!isConnected || !selectedInvoice || selectedInvoice.state >= 3 || Boolean(pendingAction)}
+                  title="Attach a hashed agent mandate, identity references, risk policy, and SLA deadline."
+                  onClick={() => submitMandate(selectedInvoice)}
+                >
+                  {pendingAction === "attachAgentMandate" ? <Loader2 className="spin" aria-hidden /> : <ShieldCheck aria-hidden />}
+                  Attach mandate
+                </button>
+                {selectedAgentContext && mandateAttached ? (
+                  <div className="proposalBox">
+                    <span>Portable receipt</span>
+                    <strong>{selectedReceiptHash ? shortHash(selectedReceiptHash) : "pending"}</strong>
+                    <small>Mandate {shortHash(selectedAgentContext.mandateHash)} · Policy {shortHash(selectedAgentContext.policyHash)}</small>
+                  </div>
+                ) : null}
+              </section>
 
               <section className="settlementDesk" aria-label="Settlement tools">
                 <label>
@@ -703,10 +838,41 @@ function toInvoiceRecord(id: bigint, raw: unknown): InvoiceRecord {
   };
 }
 
+function toAgentContextRecord(raw: unknown): AgentContextRecord {
+  const value = raw as Record<string, unknown> & readonly unknown[];
+  return {
+    payerAgentHash: (value.payerAgentHash ?? value[0] ?? zeroHash) as `0x${string}`,
+    recipientAgentHash: (value.recipientAgentHash ?? value[1] ?? zeroHash) as `0x${string}`,
+    mandateHash: (value.mandateHash ?? value[2] ?? zeroHash) as `0x${string}`,
+    policyHash: (value.policyHash ?? value[3] ?? zeroHash) as `0x${string}`,
+    slaDeadline: BigInt(value.slaDeadline as bigint | string | number | undefined ?? (value[4] as bigint | undefined) ?? 0n),
+    attachedAt: BigInt(value.attachedAt as bigint | string | number | undefined ?? (value[5] as bigint | undefined) ?? 0n),
+    attachedBy: (value.attachedBy ?? value[6] ?? zeroAddress) as `0x${string}`
+  };
+}
+
 function shortAddress(value?: string) {
   if (!value) return "not connected";
   if (value.length <= 12) return value;
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
+function shortHash(value?: string) {
+  if (!value) return "missing";
+  if (value.length <= 18) return value;
+  return `${value.slice(0, 10)}...${value.slice(-6)}`;
+}
+
+function hashText(value: string) {
+  const trimmed = value.trim();
+  if (/^0x[0-9a-fA-F]{64}$/.test(trimmed)) return trimmed as `0x${string}`;
+  return keccak256(toBytes(trimmed));
+}
+
+function hashOrZero(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return zeroHash;
+  return hashText(trimmed);
 }
 
 function formatAmount(invoice: InvoiceRecord) {

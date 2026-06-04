@@ -5,20 +5,22 @@ Use this script for screenshots or a live walkthrough. No personal video is requ
 ## Flow 1: Clean Settlement
 
 1. Create an ETH invoice with a recipient, metadata hash, due date, and timeout.
-2. Connect a payer wallet and fund the invoice.
-3. Show the agent panel reading the live `Paid` state.
-4. Release funds from payer to recipient.
-5. Show the invoice closing as `Released`.
+2. Attach an agent mandate with payer agent hash, service agent hash, policy hash, and SLA deadline.
+3. Connect a payer wallet and fund the invoice.
+4. Show the agent panel reading the live `Paid` state, mandate hash, SLA, and receipt hash.
+5. Release funds from payer to recipient.
+6. Show the invoice closing as `Released` and the finalized settlement receipt.
 
 ## Flow 2: Evidence And Dispute
 
 1. Create and pay a second invoice.
-2. Recipient attaches `ipfs://arbiflow-delivery-proof`.
-3. Payer requests a refund.
-4. Agent shows refund window, delivery evidence, timeout, and settlement options.
-5. Recipient proposes a partial split, for example `80%` recipient and `20%` payer refund.
-6. Payer accepts the settlement.
-7. Show final state `Settled`.
+2. Attach an agent mandate and SLA context.
+3. Recipient attaches `ipfs://arbiflow-delivery-proof`.
+4. Payer requests a refund.
+5. Agent shows refund window, delivery evidence, timeout, mandate context, and settlement options.
+6. Recipient proposes a partial split, for example `80%` recipient and `20%` payer refund.
+7. Payer accepts the settlement.
+8. Show final state `Settled` and the receipt hash that can feed reputation later.
 
 ## Flow 3: Timeout Protection
 
@@ -30,6 +32,7 @@ Use this script for screenshots or a live walkthrough. No personal video is requ
 ## What To Emphasize
 
 - The agent is not generic help text; it reads contract state, wallet role, timing windows, delivery evidence, and settlement proposals.
+- It also reads mandate hash, policy hash, SLA deadline, and portable receipt hash.
 - There is no admin withdrawal or trusted arbitrator.
 - Every fund movement is either direct release, timeout path, refund approval, or counterparty-accepted settlement.
 - Arbitrum makes these small settlement actions cheap enough for freelancers, agencies, merchants, and autonomous service agents.

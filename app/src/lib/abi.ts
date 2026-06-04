@@ -39,6 +39,35 @@ export const invoiceEscrowAbi = [
   },
   {
     type: "function",
+    name: "getAgentContext",
+    stateMutability: "view",
+    inputs: [{ name: "invoiceId", type: "uint256", internalType: "uint256" }],
+    outputs: [
+      {
+        name: "",
+        type: "tuple",
+        internalType: "struct InvoiceEscrow.AgentContext",
+        components: [
+          { name: "payerAgentHash", type: "bytes32", internalType: "bytes32" },
+          { name: "recipientAgentHash", type: "bytes32", internalType: "bytes32" },
+          { name: "mandateHash", type: "bytes32", internalType: "bytes32" },
+          { name: "policyHash", type: "bytes32", internalType: "bytes32" },
+          { name: "slaDeadline", type: "uint64", internalType: "uint64" },
+          { name: "attachedAt", type: "uint64", internalType: "uint64" },
+          { name: "attachedBy", type: "address", internalType: "address" }
+        ]
+      }
+    ]
+  },
+  {
+    type: "function",
+    name: "settlementReceiptHash",
+    stateMutability: "view",
+    inputs: [{ name: "invoiceId", type: "uint256", internalType: "uint256" }],
+    outputs: [{ name: "", type: "bytes32", internalType: "bytes32" }]
+  },
+  {
+    type: "function",
     name: "createInvoice",
     stateMutability: "nonpayable",
     inputs: [
@@ -56,6 +85,20 @@ export const invoiceEscrowAbi = [
     name: "payInvoice",
     stateMutability: "payable",
     inputs: [{ name: "invoiceId", type: "uint256", internalType: "uint256" }],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "attachAgentMandate",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "invoiceId", type: "uint256", internalType: "uint256" },
+      { name: "payerAgentHash", type: "bytes32", internalType: "bytes32" },
+      { name: "recipientAgentHash", type: "bytes32", internalType: "bytes32" },
+      { name: "mandateHash", type: "bytes32", internalType: "bytes32" },
+      { name: "policyHash", type: "bytes32", internalType: "bytes32" },
+      { name: "slaDeadline", type: "uint64", internalType: "uint64" }
+    ],
     outputs: []
   },
   {

@@ -1,4 +1,4 @@
-import { formatEther, zeroAddress } from "viem";
+import { formatEther, zeroAddress, zeroHash } from "viem";
 
 export const stateLabels = ["Created", "Paid", "Refund requested", "Released", "Refunded", "Cancelled", "Settled"] as const;
 
@@ -22,6 +22,16 @@ export type InvoiceRecord = {
   settlementRecipientAmount: bigint;
 };
 
+export type AgentContextRecord = {
+  payerAgentHash: `0x${string}`;
+  recipientAgentHash: `0x${string}`;
+  mandateHash: `0x${string}`;
+  policyHash: `0x${string}`;
+  slaDeadline: bigint;
+  attachedAt: bigint;
+  attachedBy: `0x${string}`;
+};
+
 export type AgentAction = {
   id: "pay" | "release" | "requestRefund" | "refund" | "cancel" | "acceptSettlement";
   label: string;
@@ -41,7 +51,9 @@ const sameAddress = (a?: string, b?: string) => Boolean(a && b && a.toLowerCase(
 export function assessInvoice(
   invoice: InvoiceRecord,
   account?: `0x${string}`,
-  nowSeconds = Math.floor(Date.now() / 1000)
+  nowSeconds = Math.floor(Date.now() / 1000),
+  agentContext?: AgentContextRecord,
+  receiptHash?: `0x${string}`
 ): AgentAssessment {
   const isCreator = sameAddress(account, invoice.creator);
   const isRecipient = sameAddress(account, invoice.recipient);
@@ -50,6 +62,15 @@ export function assessInvoice(
   const paidReleaseAt = Number(invoice.paidAt + invoice.timeout);
   const refundAvailableAt = Number(invoice.refundRequestedAt + invoice.timeout);
   const tokenLabel = invoice.token === zeroAddress ? "ETH" : "ERC20";
+  const mandateAttached = Boolean(agentContext && agentContext.mandateHash !== zeroHash);
+  const slaPassed = Boolean(agentContext?.slaDeadline && agentContext.slaDeadline > 0n && BigInt(nowSeconds) > agentContext.slaDeadline);
+  const accountabilityNotes = [
+    mandateAttached ? `Agent mandate attached: ${shortHash(agentContext?.mandateHash)}.` : "No agent mandate is attached yet.",
+    receiptHash ? `Portable receipt hash: ${shortHash(receiptHash)}.` : "Receipt hash will be available from the contract.",
+    agentContext?.slaDeadline && agentContext.slaDeadline > 0n
+      ? `SLA deadline: ${formatUnix(Number(agentContext.slaDeadline))}${slaPassed ? " (passed)" : ""}.`
+      : "No SLA deadline is encoded."
+  ];
   const settlementOpen = invoice.settlementProposedBy !== zeroAddress;
   const isSettlementProposer = sameAddress(account, invoice.settlementProposedBy);
   const canAcceptSettlement = settlementOpen && (isPayer || isRecipient) && !isSettlementProposer;
@@ -77,7 +98,7 @@ export function assessInvoice(
           reason: isCreator || isRecipient ? "Creator or recipient can cancel before payment." : "Only creator or recipient can cancel."
         }
       ],
-      notes: [invoice.metadataHash || "No metadata hash attached."]
+      notes: [invoice.metadataHash || "No metadata hash attached.", ...accountabilityNotes]
     };
   }
 
@@ -119,7 +140,8 @@ export function assessInvoice(
       notes: [
         `Recipient timeout release: ${formatUnix(paidReleaseAt)}.`,
         settlementNote,
-        invoice.deliveryHash ? `Delivery evidence: ${invoice.deliveryHash}.` : "No delivery evidence has been attached."
+        invoice.deliveryHash ? `Delivery evidence: ${invoice.deliveryHash}.` : "No delivery evidence has been attached.",
+        ...accountabilityNotes
       ]
     };
   }
@@ -156,7 +178,8 @@ export function assessInvoice(
       notes: [
         `Payer timeout refund: ${formatUnix(refundAvailableAt)}.`,
         settlementNote,
-        invoice.deliveryHash ? `Delivery evidence: ${invoice.deliveryHash}.` : "Delivery evidence is still missing."
+        invoice.deliveryHash ? `Delivery evidence: ${invoice.deliveryHash}.` : "Delivery evidence is still missing.",
+        ...accountabilityNotes
       ]
     };
   }
@@ -165,7 +188,7 @@ export function assessInvoice(
     headline: `Invoice is ${stateLabels[invoice.state]?.toLowerCase() ?? "closed"}.`,
     risk: "closed",
     actions: [],
-    notes: ["No further escrow action is available."]
+    notes: ["No further escrow action is available.", ...accountabilityNotes]
   };
 }
 
@@ -175,6 +198,11 @@ function formatAmount(value: bigint) {
 
 function trimDecimal(value: string) {
   return value.replace(/(\.\d*?[1-9])0+$/, "$1").replace(/\.0+$/, "");
+}
+
+function shortHash(value?: string) {
+  if (!value) return "missing";
+  return `${value.slice(0, 10)}...${value.slice(-6)}`;
 }
 
 function formatUnix(seconds: number) {

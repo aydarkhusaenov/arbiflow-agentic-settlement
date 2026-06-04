@@ -37,8 +37,19 @@ contract InvoiceEscrow is ReentrancyGuard {
         uint256 settlementRecipientAmount;
     }
 
+    struct AgentContext {
+        bytes32 payerAgentHash;
+        bytes32 recipientAgentHash;
+        bytes32 mandateHash;
+        bytes32 policyHash;
+        uint64 slaDeadline;
+        uint64 attachedAt;
+        address attachedBy;
+    }
+
     uint256 public invoiceCount;
     mapping(uint256 invoiceId => Invoice) private invoices;
+    mapping(uint256 invoiceId => AgentContext) private agentContexts;
 
     event InvoiceCreated(
         uint256 indexed invoiceId,
@@ -55,6 +66,15 @@ contract InvoiceEscrow is ReentrancyGuard {
     event RefundRequested(uint256 indexed invoiceId, address indexed payer, uint64 refundAvailableAt);
     event InvoiceRefunded(uint256 indexed invoiceId, address indexed payer, uint256 amount);
     event InvoiceCancelled(uint256 indexed invoiceId);
+    event AgentMandateAttached(
+        uint256 indexed invoiceId,
+        address indexed attachedBy,
+        bytes32 payerAgentHash,
+        bytes32 recipientAgentHash,
+        bytes32 mandateHash,
+        bytes32 policyHash,
+        uint64 slaDeadline
+    );
     event DeliveryMarked(uint256 indexed invoiceId, address indexed recipient, string deliveryHash);
     event SettlementProposed(
         uint256 indexed invoiceId,
@@ -69,6 +89,7 @@ contract InvoiceEscrow is ReentrancyGuard {
         uint256 recipientAmount,
         uint256 payerAmount
     );
+    event SettlementReceiptFinalized(uint256 indexed invoiceId, bytes32 indexed receiptHash, State finalState);
 
     error InvalidRecipient();
     error InvalidAmount();
@@ -81,6 +102,7 @@ contract InvoiceEscrow is ReentrancyGuard {
     error RefundTimeoutNotReached(uint256 availableAt);
     error InvalidSettlementAmount();
     error NoSettlementProposal();
+    error InvalidMandate();
 
     function createInvoice(
         address recipient,
@@ -136,6 +158,43 @@ contract InvoiceEscrow is ReentrancyGuard {
         emit InvoicePaid(invoiceId, msg.sender, invoice.token, invoice.amount);
     }
 
+    function attachAgentMandate(
+        uint256 invoiceId,
+        bytes32 payerAgentHash,
+        bytes32 recipientAgentHash,
+        bytes32 mandateHash,
+        bytes32 policyHash,
+        uint64 slaDeadline
+    ) external {
+        Invoice storage invoice = _invoice(invoiceId);
+        if (
+            msg.sender != invoice.creator && msg.sender != invoice.recipient
+                && (invoice.payer == address(0) || msg.sender != invoice.payer)
+        ) revert Unauthorized();
+        if (invoice.state >= State.Released) revert InvalidState(State.Created, invoice.state);
+        if (mandateHash == bytes32(0)) revert InvalidMandate();
+
+        agentContexts[invoiceId] = AgentContext({
+            payerAgentHash: payerAgentHash,
+            recipientAgentHash: recipientAgentHash,
+            mandateHash: mandateHash,
+            policyHash: policyHash,
+            slaDeadline: slaDeadline,
+            attachedAt: uint64(block.timestamp),
+            attachedBy: msg.sender
+        });
+
+        emit AgentMandateAttached(
+            invoiceId,
+            msg.sender,
+            payerAgentHash,
+            recipientAgentHash,
+            mandateHash,
+            policyHash,
+            slaDeadline
+        );
+    }
+
     function release(uint256 invoiceId) external nonReentrant {
         Invoice storage invoice = _invoice(invoiceId);
         if (invoice.state != State.Paid) revert InvalidState(State.Paid, invoice.state);
@@ -148,6 +207,7 @@ contract InvoiceEscrow is ReentrancyGuard {
         _transferOut(invoice.token, invoice.recipient, invoice.amount);
 
         emit InvoiceReleased(invoiceId, invoice.payer, invoice.recipient, invoice.amount);
+        emit SettlementReceiptFinalized(invoiceId, settlementReceiptHash(invoiceId), invoice.state);
     }
 
     function requestRefund(uint256 invoiceId) external {
@@ -214,6 +274,7 @@ contract InvoiceEscrow is ReentrancyGuard {
         }
 
         emit SettlementAccepted(invoiceId, msg.sender, recipientAmount, payerAmount);
+        emit SettlementReceiptFinalized(invoiceId, settlementReceiptHash(invoiceId), invoice.state);
     }
 
     function refund(uint256 invoiceId) external nonReentrant {
@@ -234,6 +295,7 @@ contract InvoiceEscrow is ReentrancyGuard {
         _transferOut(invoice.token, payer, amount);
 
         emit InvoiceRefunded(invoiceId, payer, amount);
+        emit SettlementReceiptFinalized(invoiceId, settlementReceiptHash(invoiceId), invoice.state);
     }
 
     function cancelUnpaid(uint256 invoiceId) external {
@@ -244,10 +306,54 @@ contract InvoiceEscrow is ReentrancyGuard {
         invoice.state = State.Cancelled;
 
         emit InvoiceCancelled(invoiceId);
+        emit SettlementReceiptFinalized(invoiceId, settlementReceiptHash(invoiceId), invoice.state);
     }
 
     function getInvoice(uint256 invoiceId) external view returns (Invoice memory) {
         return _invoiceView(invoiceId);
+    }
+
+    function getAgentContext(uint256 invoiceId) external view returns (AgentContext memory) {
+        _invoiceView(invoiceId);
+        return agentContexts[invoiceId];
+    }
+
+    function settlementReceiptHash(uint256 invoiceId) public view returns (bytes32) {
+        Invoice storage invoice = _invoice(invoiceId);
+        AgentContext storage context = agentContexts[invoiceId];
+        bytes32 invoiceHash = keccak256(
+            abi.encode(
+                invoice.creator,
+                invoice.payer,
+                invoice.recipient,
+                invoice.token,
+                invoice.amount,
+                invoice.state,
+                invoice.metadataHash,
+                invoice.deliveryHash,
+                invoice.settlementMemoHash,
+                invoice.settlementRecipientAmount
+            )
+        );
+        bytes32 contextHash = keccak256(
+            abi.encode(
+                context.payerAgentHash,
+                context.recipientAgentHash,
+                context.mandateHash,
+                context.policyHash,
+                context.slaDeadline
+            )
+        );
+        return keccak256(
+            abi.encode(
+                "ARBIFLOW_AGENT_SETTLEMENT_RECEIPT_V1",
+                block.chainid,
+                address(this),
+                invoiceId,
+                invoiceHash,
+                contextHash
+            )
+        );
     }
 
     function _invoice(uint256 invoiceId) private view returns (Invoice storage invoice) {

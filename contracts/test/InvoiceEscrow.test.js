@@ -2,6 +2,7 @@ const { expect } = require("chai");
 const { ethers, network } = require("hardhat");
 
 const ZERO_ADDRESS = ethers.ZeroAddress;
+const ZERO_HASH = ethers.ZeroHash;
 const HOUR = 60 * 60;
 const DAY = 24 * HOUR;
 
@@ -100,6 +101,54 @@ describe("InvoiceEscrow", function () {
     expect(await ethers.provider.getBalance(await escrow.getAddress())).to.equal(params.amount);
   });
 
+  it("attaches agent mandate context and exposes receipt hash", async function () {
+    const { id } = await createEthInvoice();
+    const now = await latestTimestamp();
+    const payerAgentHash = ethers.id("erc8004:payer-agent:invoice-risk-policy");
+    const recipientAgentHash = ethers.id("erc8004:recipient-agent:web-delivery-service");
+    const mandateHash = ethers.id("ap2-like mandate: buy landing page for 0.05 ETH");
+    const policyHash = ethers.id("policy: release only after delivery evidence");
+    const slaDeadline = now + DAY;
+
+    await expect(
+      escrow
+        .connect(creator)
+        .attachAgentMandate(id, payerAgentHash, recipientAgentHash, mandateHash, policyHash, slaDeadline)
+    )
+      .to.emit(escrow, "AgentMandateAttached")
+      .withArgs(id, creator.address, payerAgentHash, recipientAgentHash, mandateHash, policyHash, slaDeadline);
+
+    const context = await escrow.getAgentContext(id);
+    expect(context.payerAgentHash).to.equal(payerAgentHash);
+    expect(context.recipientAgentHash).to.equal(recipientAgentHash);
+    expect(context.mandateHash).to.equal(mandateHash);
+    expect(context.policyHash).to.equal(policyHash);
+    expect(context.slaDeadline).to.equal(slaDeadline);
+    expect(context.attachedBy).to.equal(creator.address);
+
+    const receiptHash = await escrow.settlementReceiptHash(id);
+    expect(receiptHash).to.not.equal(ZERO_HASH);
+  });
+
+  it("validates mandate authorization and required mandate hash", async function () {
+    const { id, params } = await createEthInvoice();
+
+    await expect(
+      escrow.connect(other).attachAgentMandate(id, ZERO_HASH, ZERO_HASH, ethers.id("mandate"), ZERO_HASH, 0)
+    ).to.be.revertedWithCustomError(escrow, "Unauthorized");
+
+    await expect(
+      escrow.connect(creator).attachAgentMandate(id, ZERO_HASH, ZERO_HASH, ZERO_HASH, ZERO_HASH, 0)
+    ).to.be.revertedWithCustomError(escrow, "InvalidMandate");
+
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+    await escrow.connect(payer).release(id);
+
+    await expect(
+      escrow.connect(creator).attachAgentMandate(id, ZERO_HASH, ZERO_HASH, ethers.id("too-late"), ZERO_HASH, 0)
+    ).to.be.revertedWithCustomError(escrow, "InvalidState");
+  });
+
   it("rejects wrong ETH payment amount and double payment", async function () {
     const { id, params } = await createEthInvoice();
 
@@ -137,6 +186,29 @@ describe("InvoiceEscrow", function () {
 
     const invoice = await escrow.getInvoice(id);
     expect(invoice.state).to.equal(3);
+  });
+
+  it("emits a portable settlement receipt when funds are released", async function () {
+    const { id, params } = await createEthInvoice();
+    await escrow
+      .connect(creator)
+      .attachAgentMandate(
+        id,
+        ethers.id("payer-agent"),
+        ethers.id("recipient-agent"),
+        ethers.id("signed mandate"),
+        ethers.id("agent policy"),
+        (await latestTimestamp()) + DAY
+      );
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+
+    const tx = await escrow.connect(payer).release(id);
+    const receipt = await tx.wait();
+    const receiptEvent = receipt.logs.find((log) => log.fragment && log.fragment.name === "SettlementReceiptFinalized");
+
+    expect(receiptEvent.args.invoiceId).to.equal(id);
+    expect(receiptEvent.args.finalState).to.equal(3);
+    expect(receiptEvent.args.receiptHash).to.equal(await escrow.settlementReceiptHash(id));
   });
 
   it("prevents wrong caller release before timeout and double release", async function () {

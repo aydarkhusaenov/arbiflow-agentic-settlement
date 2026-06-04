@@ -35,6 +35,7 @@ pnpm build
 - Trust-minimized escrow for real commercial invoices.
 - On-chain delivery evidence for off-chain work handoff.
 - Counterparty-approved partial settlements for disputes without a centralized arbitrator.
+- Hashed agent mandates, policy hashes, SLA deadline, and portable settlement receipt hashes.
 - Timeout paths for inactive counterparties.
 - ETH and ERC20 support.
 - Agent panel that reads live contract state, wallet role, timing windows, evidence, and settlement proposals.
@@ -98,6 +99,7 @@ Open `http://localhost:3000`, connect a wallet on Arbitrum Sepolia, and paste th
 - Security notes: [docs/security.md](docs/security.md)
 - HackQuest draft: [docs/submission.md](docs/submission.md)
 - Judge demo script: [docs/demo-script.md](docs/demo-script.md)
+- Research notes: [docs/research-notes.md](docs/research-notes.md)
 
 ## No-Video Constraint
 
