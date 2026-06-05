@@ -58,6 +58,50 @@ describe("InvoiceEscrow", function () {
     return { id: event.args.invoiceId, params };
   }
 
+  async function signPaymentMandate(id, signer, authorizedPayer, overrides = {}) {
+    const now = await latestTimestamp();
+    const payerAgentHash = overrides.payerAgentHash ?? ethers.id("erc8004:payer-agent:signed-checkout");
+    const recipientAgentHash = overrides.recipientAgentHash ?? ethers.id("erc8004:service-agent:signed-checkout");
+    const mandateHash = overrides.mandateHash ?? ethers.id("ap2:signed user mandate");
+    const policyHash = overrides.policyHash ?? ethers.id("policy:signed payment scope");
+    const slaDeadline = overrides.slaDeadline ?? now + DAY;
+    const mandateExpiresAt = overrides.mandateExpiresAt ?? now + DAY;
+    const paymentRequirementHash = await escrow.paymentRequirementHash(id);
+    const { chainId } = await ethers.provider.getNetwork();
+    const domain = {
+      name: "ArbiFlow Agentic Settlement",
+      version: "1",
+      chainId,
+      verifyingContract: await escrow.getAddress()
+    };
+    const types = {
+      PaymentMandate: [
+        { name: "invoiceId", type: "uint256" },
+        { name: "payer", type: "address" },
+        { name: "paymentRequirementHash", type: "bytes32" },
+        { name: "payerAgentHash", type: "bytes32" },
+        { name: "recipientAgentHash", type: "bytes32" },
+        { name: "mandateHash", type: "bytes32" },
+        { name: "policyHash", type: "bytes32" },
+        { name: "slaDeadline", type: "uint64" },
+        { name: "expiresAt", type: "uint64" }
+      ]
+    };
+    const value = {
+      invoiceId: id,
+      payer: authorizedPayer.address,
+      paymentRequirementHash,
+      payerAgentHash,
+      recipientAgentHash,
+      mandateHash,
+      policyHash,
+      slaDeadline,
+      expiresAt: mandateExpiresAt
+    };
+    const signature = await signer.signTypedData(domain, types, value);
+    return { payerAgentHash, recipientAgentHash, mandateHash, policyHash, slaDeadline, mandateExpiresAt, signature };
+  }
+
   it("creates invoices with expected fields", async function () {
     const { id, params } = await createEthInvoice();
 
@@ -120,7 +164,17 @@ describe("InvoiceEscrow", function () {
         .attachAgentMandate(id, payerAgentHash, recipientAgentHash, mandateHash, policyHash, slaDeadline)
     )
       .to.emit(escrow, "AgentMandateAttached")
-      .withArgs(id, creator.address, payerAgentHash, recipientAgentHash, mandateHash, policyHash, slaDeadline);
+      .withArgs(
+        id,
+        creator.address,
+        payerAgentHash,
+        recipientAgentHash,
+        mandateHash,
+        policyHash,
+        slaDeadline,
+        ZERO_ADDRESS,
+        0
+      );
 
     const context = await escrow.getAgentContext(id);
     expect(context.payerAgentHash).to.equal(payerAgentHash);
@@ -129,9 +183,126 @@ describe("InvoiceEscrow", function () {
     expect(context.policyHash).to.equal(policyHash);
     expect(context.slaDeadline).to.equal(slaDeadline);
     expect(context.attachedBy).to.equal(creator.address);
+    expect(context.authorizedPayer).to.equal(ZERO_ADDRESS);
+    expect(context.mandateExpiresAt).to.equal(0);
 
     const receiptHash = await escrow.settlementReceiptHash(id);
     expect(receiptHash).to.not.equal(ZERO_HASH);
+  });
+
+  it("exposes an x402-style payment requirement hash bound to invoice terms", async function () {
+    const { id } = await createEthInvoice();
+
+    const requirementHash = await escrow.paymentRequirementHash(id);
+    expect(requirementHash).to.not.equal(ZERO_HASH);
+
+    const otherInvoice = await createEthInvoice({ metadataHash: "ipfs://invoice-002" });
+    expect(await escrow.paymentRequirementHash(otherInvoice.id)).to.not.equal(requirementHash);
+  });
+
+  it("attaches a signed payment mandate and restricts payment to authorized payer", async function () {
+    const { id, params } = await createEthInvoice();
+    const signed = await signPaymentMandate(id, payer, payer);
+
+    await expect(
+      escrow
+        .connect(other)
+        .attachSignedAgentMandate(
+          id,
+          payer.address,
+          signed.payerAgentHash,
+          signed.recipientAgentHash,
+          signed.mandateHash,
+          signed.policyHash,
+          signed.slaDeadline,
+          signed.mandateExpiresAt,
+          signed.signature
+        )
+    )
+      .to.emit(escrow, "AgentMandateAttached")
+      .withArgs(
+        id,
+        other.address,
+        signed.payerAgentHash,
+        signed.recipientAgentHash,
+        signed.mandateHash,
+        signed.policyHash,
+        signed.slaDeadline,
+        payer.address,
+        signed.mandateExpiresAt
+      );
+
+    const context = await escrow.getAgentContext(id);
+    expect(context.authorizedPayer).to.equal(payer.address);
+    expect(context.mandateExpiresAt).to.equal(signed.mandateExpiresAt);
+
+    await expect(escrow.connect(other).payInvoice(id, { value: params.amount })).to.be.revertedWithCustomError(
+      escrow,
+      "Unauthorized"
+    );
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+
+    const invoice = await escrow.getInvoice(id);
+    expect(invoice.payer).to.equal(payer.address);
+    expect(invoice.state).to.equal(1);
+  });
+
+  it("rejects signed mandates from the wrong signer", async function () {
+    const { id } = await createEthInvoice();
+    const signed = await signPaymentMandate(id, other, payer);
+
+    await expect(
+      escrow.attachSignedAgentMandate(
+        id,
+        payer.address,
+        signed.payerAgentHash,
+        signed.recipientAgentHash,
+        signed.mandateHash,
+        signed.policyHash,
+        signed.slaDeadline,
+        signed.mandateExpiresAt,
+        signed.signature
+      )
+    ).to.be.revertedWithCustomError(escrow, "InvalidSignature");
+  });
+
+  it("rejects expired signed mandates and expired authorized payments", async function () {
+    const { id, params } = await createEthInvoice({ timeout: HOUR });
+    const now = await latestTimestamp();
+    const expired = await signPaymentMandate(id, payer, payer, { mandateExpiresAt: now });
+
+    await expect(
+      escrow.attachSignedAgentMandate(
+        id,
+        payer.address,
+        expired.payerAgentHash,
+        expired.recipientAgentHash,
+        expired.mandateHash,
+        expired.policyHash,
+        expired.slaDeadline,
+        expired.mandateExpiresAt,
+        expired.signature
+      )
+    ).to.be.revertedWithCustomError(escrow, "MandateExpired");
+
+    const active = await signPaymentMandate(id, payer, payer, { mandateExpiresAt: now + HOUR });
+    await escrow.attachSignedAgentMandate(
+      id,
+      payer.address,
+      active.payerAgentHash,
+      active.recipientAgentHash,
+      active.mandateHash,
+      active.policyHash,
+      active.slaDeadline,
+      active.mandateExpiresAt,
+      active.signature
+    );
+
+    await increaseTime(HOUR + 1);
+    await expect(escrow.connect(payer).payInvoice(id, { value: params.amount })).to.be.revertedWithCustomError(
+      escrow,
+      "MandateExpired"
+    );
   });
 
   it("prevents agent mandate overwrite after first attachment", async function () {

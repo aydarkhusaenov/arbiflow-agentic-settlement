@@ -5,12 +5,13 @@ Use this script for screenshots or a live walkthrough. No personal video is requ
 ## Flow 1: Clean Settlement
 
 1. Create an ETH invoice with a recipient, metadata hash, due date, and timeout.
-2. Attach an agent mandate with payer agent hash, service agent hash, policy hash, and SLA deadline.
-3. Recipient posts a small service bond.
-4. Connect a payer wallet and fund the invoice.
-5. Show the agent panel reading the live `Paid` state, mandate hash, SLA, bond, and receipt hash.
-6. Release funds from payer to recipient.
-7. Show the invoice closing as `Released`, bond returned to provider, and the finalized settlement receipt.
+2. Show the generated payment requirement hash.
+3. Connect the payer wallet, enter it as authorized payer, and attach a signed mandate with payer agent hash, service agent hash, policy hash, SLA deadline, and mandate expiry.
+4. Recipient posts a small service bond.
+5. Fund the invoice from the authorized payer wallet.
+6. Show the agent panel reading the live `Paid` state, authorized payer, payment requirement hash, mandate hash, SLA, bond, and receipt hash.
+7. Release funds from payer to recipient.
+8. Show the invoice closing as `Released`, bond returned to provider, and the finalized settlement receipt.
 
 ## Flow 2: Evidence And Dispute
 
@@ -37,7 +38,7 @@ Use this script for screenshots or a live walkthrough. No personal video is requ
 ## What To Emphasize
 
 - The agent is not generic help text; it reads contract state, wallet role, timing windows, delivery evidence, and settlement proposals.
-- It also reads mandate hash, policy hash, SLA deadline, and portable receipt hash.
+- It also reads authorized payer, payment requirement hash, mandate hash, policy hash, SLA deadline, and portable receipt hash.
 - It reads service bond status and explains whether the bond is active, returned, or slashed.
 - There is no admin withdrawal or trusted arbitrator.
 - Every fund movement is either direct release, timeout path, refund approval, or counterparty-accepted settlement.

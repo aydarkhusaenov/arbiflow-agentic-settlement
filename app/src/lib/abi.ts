@@ -55,7 +55,9 @@ export const invoiceEscrowAbi = [
           { name: "policyHash", type: "bytes32", internalType: "bytes32" },
           { name: "slaDeadline", type: "uint64", internalType: "uint64" },
           { name: "attachedAt", type: "uint64", internalType: "uint64" },
-          { name: "attachedBy", type: "address", internalType: "address" }
+          { name: "attachedBy", type: "address", internalType: "address" },
+          { name: "authorizedPayer", type: "address", internalType: "address" },
+          { name: "mandateExpiresAt", type: "uint64", internalType: "uint64" }
         ]
       }
     ]
@@ -85,6 +87,29 @@ export const invoiceEscrowAbi = [
         ]
       }
     ]
+  },
+  {
+    type: "function",
+    name: "paymentRequirementHash",
+    stateMutability: "view",
+    inputs: [{ name: "invoiceId", type: "uint256", internalType: "uint256" }],
+    outputs: [{ name: "", type: "bytes32", internalType: "bytes32" }]
+  },
+  {
+    type: "function",
+    name: "paymentMandateDigest",
+    stateMutability: "view",
+    inputs: [
+      { name: "invoiceId", type: "uint256", internalType: "uint256" },
+      { name: "authorizedPayer", type: "address", internalType: "address" },
+      { name: "payerAgentHash", type: "bytes32", internalType: "bytes32" },
+      { name: "recipientAgentHash", type: "bytes32", internalType: "bytes32" },
+      { name: "mandateHash", type: "bytes32", internalType: "bytes32" },
+      { name: "policyHash", type: "bytes32", internalType: "bytes32" },
+      { name: "slaDeadline", type: "uint64", internalType: "uint64" },
+      { name: "mandateExpiresAt", type: "uint64", internalType: "uint64" }
+    ],
+    outputs: [{ name: "", type: "bytes32", internalType: "bytes32" }]
   },
   {
     type: "function",
@@ -118,6 +143,23 @@ export const invoiceEscrowAbi = [
       { name: "mandateHash", type: "bytes32", internalType: "bytes32" },
       { name: "policyHash", type: "bytes32", internalType: "bytes32" },
       { name: "slaDeadline", type: "uint64", internalType: "uint64" }
+    ],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "attachSignedAgentMandate",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "invoiceId", type: "uint256", internalType: "uint256" },
+      { name: "authorizedPayer", type: "address", internalType: "address" },
+      { name: "payerAgentHash", type: "bytes32", internalType: "bytes32" },
+      { name: "recipientAgentHash", type: "bytes32", internalType: "bytes32" },
+      { name: "mandateHash", type: "bytes32", internalType: "bytes32" },
+      { name: "policyHash", type: "bytes32", internalType: "bytes32" },
+      { name: "slaDeadline", type: "uint64", internalType: "uint64" },
+      { name: "mandateExpiresAt", type: "uint64", internalType: "uint64" },
+      { name: "signature", type: "bytes", internalType: "bytes" }
     ],
     outputs: []
   },

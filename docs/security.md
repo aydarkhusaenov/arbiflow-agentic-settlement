@@ -13,6 +13,10 @@
 - Agent mandates are immutable after first attachment and must be attached before payment.
 - SLA deadlines must be future timestamps when attached; `0` means no SLA.
 - Agent mandates are stored as hashes/references, not raw sensitive prompts or private user instructions.
+- Signed mandates use EIP-712 typed data bound to the invoice payment requirement hash.
+- Signed mandates can lock funding to an authorized payer and expire before payment.
+- Signature verification accepts EOA signatures and ERC-1271 contract-wallet validation.
+- Payment requirement hashes bind invoice amount, token, recipient, due date, timeout, metadata, chain, and escrow contract.
 - Finalized receipt hashes are deterministic summaries and do not custody or redirect funds.
 - Delivery evidence stores both a reference hash and the timestamp when it was attached.
 - Service bonds are optional and resolved only through existing terminal states.
@@ -29,6 +33,8 @@
 - Payer or recipient can propose a partial split settlement while an invoice is paid or refund-requested.
 - Only the non-proposing counterparty can accept a settlement proposal.
 - Creator or recipient can attach an agent mandate before payment; the payer accepts those rules by funding the invoice.
+- Anyone can submit a signed mandate only if the authorized payer signed the exact EIP-712 mandate for that invoice requirement.
+- If a signed mandate has an authorized payer, only that payer can fund the invoice.
 - Recipient can post a service bond before final invoice closure.
 - Recipient timeout release is blocked by an SLA unless delivery evidence was attached by the SLA deadline.
 - Service bond is slashed only if refund occurs after SLA, no timely delivery evidence exists, and a payer is present.
@@ -63,6 +69,11 @@ Tests cover:
 - mandate overwrite rejection
 - stale SLA deadline rejection
 - post-payment mandate rejection
+- x402-style payment requirement hash generation
+- EIP-712 signed mandate attachment
+- wrong-signer signed mandate rejection
+- authorized payer payment lock
+- signed mandate expiry before payment
 - portable settlement receipt event
 - ETH service bond return on release
 - ETH service bond slash on missed SLA
@@ -78,7 +89,7 @@ Tests cover:
 - `pnpm test`: contract tests plus production frontend build.
 - `pnpm audit --prod`: no known production vulnerabilities.
 - `pnpm audit --audit-level high`: no known high-severity vulnerabilities.
-- `slither contracts --filter-paths "contracts/contracts/Mock|contracts/test|node_modules"`: no reentrancy findings after payout refactor. Remaining findings are expected use of `block.timestamp` for due dates/timeouts/SLA checks and low-level ETH `.call` with checked return value.
+- `slither contracts --filter-paths "contracts/contracts/Mock|contracts/test|node_modules"`: no reentrancy findings after payout refactor. Remaining findings are expected use of `block.timestamp` for due dates/timeouts/SLA/expiry checks, a bounded 65-byte ECDSA recovery assembly block, ERC-1271 `staticcall`, and low-level ETH `.call` with checked return value.
 
 ## Residual Risks
 
@@ -86,6 +97,8 @@ Tests cover:
 - Metadata is stored as a string reference and is not validated on-chain.
 - Settlement memos and delivery evidence are off-chain references; the contract enforces consent and payouts, not truthfulness of external files.
 - Agent mandate hashes are integrity anchors. External systems still need to store or verify the corresponding signed payload.
+- The EIP-712 signed mandate binds a payer to the invoice requirement hash, but it does not prove off-chain metadata truthfulness.
+- The in-contract EOA verifier supports standard 65-byte secp256k1 signatures. Contract wallets can use ERC-1271 validation.
 - Service bond slashing uses objective time/evidence conditions, not subjective quality evaluation.
 - No centralized arbitration layer is included by design; compromise settlement is counterparty-approved.
 - Full dev-tooling audit still reports one low-severity `elliptic` advisory through Hardhat 2 / ethers v5 internals. The advisory currently has no patched version; it is not part of the production frontend dependency graph.

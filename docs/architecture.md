@@ -36,6 +36,7 @@ Settled
 
 Created
   | attachAgentMandate by creator or recipient
+  | attachSignedAgentMandate with payer EIP-712 signature
   v
 AgentContext attached
 
@@ -80,10 +81,40 @@ Each invoice can carry a lightweight agent accountability layer:
 - `policyHash`: hash of agent risk controls, release conditions, or tool policy.
 - `slaDeadline`: service-level deadline used by the agent panel.
 - `attachedBy`: account that attached the context.
+- `authorizedPayer`: optional payer address recovered from an EIP-712 signed mandate.
+- `mandateExpiresAt`: optional expiry for the signed payer mandate.
 
 This keeps the contract independent from any one registry while creating a deterministic bridge to agent identity, reputation, and signed mandate systems.
 
 Mandates are immutable after first attachment and must be attached before payment. A non-zero SLA deadline must be in the future, which prevents a payer from adding stale rules after funds or provider bond are already at risk.
+
+Signed mandates use an EIP-712 `PaymentMandate` over:
+
+- invoice id
+- authorized payer
+- `paymentRequirementHash(invoiceId)`
+- payer and recipient agent hashes
+- mandate hash
+- policy hash
+- SLA deadline
+- mandate expiry
+
+The signature verifier supports normal EOA signatures and ERC-1271 contract-wallet validation. If an authorized payer is set, only that payer can fund the invoice and the mandate must still be unexpired.
+
+## Payment Requirement
+
+`paymentRequirementHash(invoiceId)` is an x402-style escrow quote hash over:
+
+- chain id and escrow contract
+- invoice id
+- recipient
+- token
+- amount
+- due date
+- timeout
+- metadata hash
+
+This gives HTTP/API agents and facilitators a compact requirement to compare before asking a wallet to sign or fund escrow. It is not a direct payment receipt; it is the pre-funding quote that the signed mandate binds to.
 
 ## Bond Context
 
@@ -143,6 +174,7 @@ ArbiFlow deliberately avoids an admin arbitrator. If delivery is disputed, payer
 - split-settlement payout
 - resolved service bond amount, recipient, and slashing status
 - agent hashes, mandate hash, policy hash, and SLA deadline
+- authorized payer and signed mandate expiry
 
 When an invoice closes through release, refund, cancellation, or settlement, the contract emits `SettlementReceiptFinalized`. This creates a compact receipt that can be indexed now and later attached to reputation systems or validator flows.
 

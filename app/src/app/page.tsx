@@ -27,6 +27,7 @@ import {
   useReadContract,
   useReadContracts,
   useSwitchChain,
+  useWalletClient,
   useWriteContract
 } from "wagmi";
 import { arbitrumSepolia, hardhat } from "wagmi/chains";
@@ -52,6 +53,8 @@ type MandateForm = {
   mandate: string;
   policy: string;
   slaHours: string;
+  authorizedPayer: string;
+  mandateExpiryHours: string;
 };
 
 type BondContextRecord = {
@@ -76,8 +79,24 @@ const defaultMandateForm: MandateForm = {
   recipientAgent: "erc8004:service-agent:delivery-proof-required",
   mandate: "Pay for the invoice only under the attached metadata, delivery evidence, and settlement rules.",
   policy: "Release on buyer confirmation, attach evidence for disputes, allow counterparty-approved split settlement.",
-  slaHours: "72"
+  slaHours: "72",
+  authorizedPayer: "",
+  mandateExpiryHours: "168"
 };
+
+const paymentMandateTypes = {
+  PaymentMandate: [
+    { name: "invoiceId", type: "uint256" },
+    { name: "payer", type: "address" },
+    { name: "paymentRequirementHash", type: "bytes32" },
+    { name: "payerAgentHash", type: "bytes32" },
+    { name: "recipientAgentHash", type: "bytes32" },
+    { name: "mandateHash", type: "bytes32" },
+    { name: "policyHash", type: "bytes32" },
+    { name: "slaDeadline", type: "uint64" },
+    { name: "expiresAt", type: "uint64" }
+  ]
+} as const;
 
 export default function Home() {
   const { address, isConnected, chain } = useAccount();
@@ -86,6 +105,7 @@ export default function Home() {
   const { disconnect } = useDisconnect();
   const { switchChain } = useSwitchChain();
   const publicClient = usePublicClient();
+  const { data: walletClient } = useWalletClient();
   const { writeContractAsync } = useWriteContract();
 
   const [form, setForm] = useState<CreateForm>(defaultForm);
@@ -201,6 +221,17 @@ export default function Home() {
     query: { enabled: Boolean(contractAddress && selectedInvoice) }
   });
 
+  const {
+    data: selectedRequirementHash,
+    refetch: refetchRequirementHash
+  } = useReadContract({
+    address: contractAddress,
+    abi: invoiceEscrowAbi,
+    functionName: "paymentRequirementHash",
+    args: selectedInvoice ? [selectedInvoice.id] : undefined,
+    query: { enabled: Boolean(contractAddress && selectedInvoice) }
+  });
+
   const selectedAgentContext = selectedAgentContextData ? toAgentContextRecord(selectedAgentContextData) : undefined;
   const selectedBondContext = selectedBondContextData ? toBondContextRecord(selectedBondContextData) : undefined;
   const selectedInvoiceWithBond =
@@ -254,6 +285,7 @@ export default function Home() {
     await refetchAgentContext();
     await refetchReceiptHash();
     await refetchBondContext();
+    await refetchRequirementHash();
   }
 
   async function submitCreate(event: FormEvent<HTMLFormElement>) {
@@ -359,13 +391,86 @@ export default function Home() {
     }
     const slaHours = Math.max(0, Number(mandateForm.slaHours || "0"));
     const slaDeadline = slaHours > 0 ? BigInt(Math.floor(Date.now() / 1000) + Math.round(slaHours * HOUR)) : 0n;
-    await runWrite("attachAgentMandate", [
+    const payerAgentHash = hashOrZero(mandateForm.payerAgent);
+    const recipientAgentHash = hashOrZero(mandateForm.recipientAgent);
+    const mandateHash = hashText(mandate);
+    const policyHash = hashOrZero(mandateForm.policy);
+    const authorizedPayer = mandateForm.authorizedPayer.trim();
+
+    if (!authorizedPayer) {
+      await runWrite("attachAgentMandate", [
+        invoice.id,
+        payerAgentHash,
+        recipientAgentHash,
+        mandateHash,
+        policyHash,
+        slaDeadline
+      ]);
+      return;
+    }
+
+    if (!isAddress(authorizedPayer)) {
+      setTxError("Authorized payer address is invalid.");
+      return;
+    }
+    if (!address || authorizedPayer.toLowerCase() !== address.toLowerCase()) {
+      setTxError("Connect the authorized payer wallet to sign this mandate.");
+      return;
+    }
+    if (!walletClient || !contractAddress) {
+      setTxError("Wallet signing is unavailable.");
+      return;
+    }
+
+    const expiryHours = Math.max(1, Number(mandateForm.mandateExpiryHours || "1"));
+    const mandateExpiresAt = BigInt(Math.floor(Date.now() / 1000) + Math.round(expiryHours * HOUR));
+    const paymentRequirementHash =
+      selectedRequirementHash ??
+      ((await publicClient?.readContract({
+        address: contractAddress,
+        abi: invoiceEscrowAbi,
+        functionName: "paymentRequirementHash",
+        args: [invoice.id]
+      })) as `0x${string}` | undefined);
+
+    if (!paymentRequirementHash) {
+      setTxError("Payment requirement hash is unavailable.");
+      return;
+    }
+
+    const signature = await walletClient.signTypedData({
+      account: address,
+      domain: {
+        name: "ArbiFlow Agentic Settlement",
+        version: "1",
+        chainId,
+        verifyingContract: contractAddress
+      },
+      primaryType: "PaymentMandate",
+      types: paymentMandateTypes,
+      message: {
+        invoiceId: invoice.id,
+        payer: authorizedPayer as `0x${string}`,
+        paymentRequirementHash,
+        payerAgentHash,
+        recipientAgentHash,
+        mandateHash,
+        policyHash,
+        slaDeadline,
+        expiresAt: mandateExpiresAt
+      }
+    });
+
+    await runWrite("attachSignedAgentMandate", [
       invoice.id,
-      hashOrZero(mandateForm.payerAgent),
-      hashOrZero(mandateForm.recipientAgent),
-      hashText(mandate),
-      hashOrZero(mandateForm.policy),
-      slaDeadline
+      authorizedPayer as `0x${string}`,
+      payerAgentHash,
+      recipientAgentHash,
+      mandateHash,
+      policyHash,
+      slaDeadline,
+      mandateExpiresAt,
+      signature
     ]);
   }
 
@@ -643,6 +748,18 @@ export default function Home() {
                   <dd>{mandateAttached ? "attached" : "missing"}</dd>
                 </div>
                 <div>
+                  <dt>Payer lock</dt>
+                  <dd>
+                    {selectedAgentContext?.authorizedPayer && selectedAgentContext.authorizedPayer !== zeroAddress
+                      ? shortAddress(selectedAgentContext.authorizedPayer)
+                      : "open"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Payment req</dt>
+                  <dd>{selectedRequirementHash ? shortHash(selectedRequirementHash) : "pending"}</dd>
+                </div>
+                <div>
                   <dt>Receipt</dt>
                   <dd>{selectedReceiptHash ? shortHash(selectedReceiptHash) : "pending"}</dd>
                 </div>
@@ -714,21 +831,46 @@ export default function Home() {
                     placeholder="72"
                   />
                 </label>
+                <label>
+                  Authorized payer
+                  <input
+                    value={mandateForm.authorizedPayer}
+                    onChange={(event) => setMandateForm({ ...mandateForm, authorizedPayer: event.target.value })}
+                    placeholder="0x... optional"
+                    spellCheck={false}
+                  />
+                </label>
+                <label>
+                  Mandate expiry
+                  <input
+                    value={mandateForm.mandateExpiryHours}
+                    onChange={(event) => setMandateForm({ ...mandateForm, mandateExpiryHours: event.target.value })}
+                    inputMode="decimal"
+                    placeholder="168"
+                  />
+                </label>
                 <button
                   className="button action"
                   type="button"
                   disabled={!isConnected || !selectedInvoiceWithBond || selectedInvoiceWithBond.state !== 0 || Boolean(pendingAction)}
-                  title="Attach a hashed agent mandate, identity references, risk policy, and optional SLA deadline before payment."
+                  title="Attach a hashed mandate before payment, optionally with a connected authorized-payer EIP-712 signature."
                   onClick={() => submitMandate(selectedInvoiceWithBond)}
                 >
-                  {pendingAction === "attachAgentMandate" ? <Loader2 className="spin" aria-hidden /> : <ShieldCheck aria-hidden />}
+                  {pendingAction === "attachAgentMandate" || pendingAction === "attachSignedAgentMandate" ? (
+                    <Loader2 className="spin" aria-hidden />
+                  ) : (
+                    <ShieldCheck aria-hidden />
+                  )}
                   Attach mandate
                 </button>
                 {selectedAgentContext && mandateAttached ? (
                   <div className="proposalBox">
-                    <span>Portable receipt</span>
+                    <span>Mandate proof</span>
                     <strong>{selectedReceiptHash ? shortHash(selectedReceiptHash) : "pending"}</strong>
-                    <small>Mandate {shortHash(selectedAgentContext.mandateHash)} · Policy {shortHash(selectedAgentContext.policyHash)}</small>
+                    <small>
+                      Requirement {selectedRequirementHash ? shortHash(selectedRequirementHash) : "pending"} · Payer{" "}
+                      {selectedAgentContext.authorizedPayer !== zeroAddress ? shortAddress(selectedAgentContext.authorizedPayer) : "open"}
+                    </small>
                   </div>
                 ) : null}
               </section>
@@ -943,7 +1085,9 @@ function toAgentContextRecord(raw: unknown): AgentContextRecord {
     policyHash: (value.policyHash ?? value[3] ?? zeroHash) as `0x${string}`,
     slaDeadline: BigInt(value.slaDeadline as bigint | string | number | undefined ?? (value[4] as bigint | undefined) ?? 0n),
     attachedAt: BigInt(value.attachedAt as bigint | string | number | undefined ?? (value[5] as bigint | undefined) ?? 0n),
-    attachedBy: (value.attachedBy ?? value[6] ?? zeroAddress) as `0x${string}`
+    attachedBy: (value.attachedBy ?? value[6] ?? zeroAddress) as `0x${string}`,
+    authorizedPayer: (value.authorizedPayer ?? value[7] ?? zeroAddress) as `0x${string}`,
+    mandateExpiresAt: BigInt(value.mandateExpiresAt as bigint | string | number | undefined ?? (value[8] as bigint | undefined) ?? 0n)
   };
 }
 

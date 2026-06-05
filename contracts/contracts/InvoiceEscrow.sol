@@ -4,9 +4,21 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {IERC1271} from "@openzeppelin/contracts/interfaces/IERC1271.sol";
 
 contract InvoiceEscrow is ReentrancyGuard {
     using SafeERC20 for IERC20;
+
+    bytes32 public constant EIP712_DOMAIN_TYPEHASH = keccak256(
+        "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+    );
+    bytes32 public constant EIP712_NAME_HASH = keccak256("ArbiFlow Agentic Settlement");
+    bytes32 public constant EIP712_VERSION_HASH = keccak256("1");
+    bytes32 public constant PAYMENT_MANDATE_TYPEHASH = keccak256(
+        "PaymentMandate(uint256 invoiceId,address payer,bytes32 paymentRequirementHash,bytes32 payerAgentHash,bytes32 recipientAgentHash,bytes32 mandateHash,bytes32 policyHash,uint64 slaDeadline,uint64 expiresAt)"
+    );
+    uint256 private constant SECP256K1_HALF_ORDER =
+        0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0;
 
     enum State {
         Created,
@@ -46,6 +58,8 @@ contract InvoiceEscrow is ReentrancyGuard {
         uint64 slaDeadline;
         uint64 attachedAt;
         address attachedBy;
+        address authorizedPayer;
+        uint64 mandateExpiresAt;
     }
 
     struct BondContext {
@@ -89,7 +103,9 @@ contract InvoiceEscrow is ReentrancyGuard {
         bytes32 recipientAgentHash,
         bytes32 mandateHash,
         bytes32 policyHash,
-        uint64 slaDeadline
+        uint64 slaDeadline,
+        address authorizedPayer,
+        uint64 mandateExpiresAt
     );
     event DeliveryMarked(uint256 indexed invoiceId, address indexed recipient, string deliveryHash);
     event SettlementProposed(
@@ -122,6 +138,9 @@ contract InvoiceEscrow is ReentrancyGuard {
     error InvalidBondAmount();
     error MandateAlreadyAttached();
     error InvalidSlaDeadline();
+    error InvalidPayer();
+    error InvalidSignature();
+    error MandateExpired();
 
     function createInvoice(
         address recipient,
@@ -164,6 +183,10 @@ contract InvoiceEscrow is ReentrancyGuard {
         if (invoice.state != State.Created) revert InvalidState(State.Created, invoice.state);
         if (invoice.dueAt != 0 && block.timestamp > invoice.dueAt) revert InvoicePastDue();
 
+        AgentContext storage context = agentContexts[invoiceId];
+        if (context.authorizedPayer != address(0) && msg.sender != context.authorizedPayer) revert Unauthorized();
+        if (context.mandateExpiresAt != 0 && block.timestamp >= context.mandateExpiresAt) revert MandateExpired();
+
         if (invoice.token == address(0)) {
             if (msg.value != invoice.amount) revert IncorrectPayment();
         } else {
@@ -193,27 +216,66 @@ contract InvoiceEscrow is ReentrancyGuard {
         ) revert Unauthorized();
         if (invoice.state != State.Created) revert InvalidState(State.Created, invoice.state);
         if (mandateHash == bytes32(0)) revert InvalidMandate();
-        if (agentContexts[invoiceId].mandateHash != bytes32(0)) revert MandateAlreadyAttached();
-        if (slaDeadline != 0 && slaDeadline <= block.timestamp) revert InvalidSlaDeadline();
-
-        agentContexts[invoiceId] = AgentContext({
-            payerAgentHash: payerAgentHash,
-            recipientAgentHash: recipientAgentHash,
-            mandateHash: mandateHash,
-            policyHash: policyHash,
-            slaDeadline: slaDeadline,
-            attachedAt: uint64(block.timestamp),
-            attachedBy: msg.sender
-        });
-
-        emit AgentMandateAttached(
+        _validateMandateAttach(invoiceId, slaDeadline);
+        _attachAgentContext(
             invoiceId,
-            msg.sender,
+            AgentContext({
+                payerAgentHash: payerAgentHash,
+                recipientAgentHash: recipientAgentHash,
+                mandateHash: mandateHash,
+                policyHash: policyHash,
+                slaDeadline: slaDeadline,
+                attachedAt: uint64(block.timestamp),
+                attachedBy: msg.sender,
+                authorizedPayer: address(0),
+                mandateExpiresAt: 0
+            })
+        );
+    }
+
+    function attachSignedAgentMandate(
+        uint256 invoiceId,
+        address authorizedPayer,
+        bytes32 payerAgentHash,
+        bytes32 recipientAgentHash,
+        bytes32 mandateHash,
+        bytes32 policyHash,
+        uint64 slaDeadline,
+        uint64 mandateExpiresAt,
+        bytes calldata signature
+    ) external nonReentrant {
+        Invoice storage invoice = _invoice(invoiceId);
+        if (invoice.state != State.Created) revert InvalidState(State.Created, invoice.state);
+        if (authorizedPayer == address(0)) revert InvalidPayer();
+        if (mandateHash == bytes32(0)) revert InvalidMandate();
+        if (mandateExpiresAt != 0 && mandateExpiresAt <= block.timestamp) revert MandateExpired();
+        _validateMandateAttach(invoiceId, slaDeadline);
+
+        bytes32 digest = paymentMandateDigest(
+            invoiceId,
+            authorizedPayer,
             payerAgentHash,
             recipientAgentHash,
             mandateHash,
             policyHash,
-            slaDeadline
+            slaDeadline,
+            mandateExpiresAt
+        );
+        if (!_isValidSignature(authorizedPayer, digest, signature)) revert InvalidSignature();
+
+        _attachAgentContext(
+            invoiceId,
+            AgentContext({
+                payerAgentHash: payerAgentHash,
+                recipientAgentHash: recipientAgentHash,
+                mandateHash: mandateHash,
+                policyHash: policyHash,
+                slaDeadline: slaDeadline,
+                attachedAt: uint64(block.timestamp),
+                attachedBy: msg.sender,
+                authorizedPayer: authorizedPayer,
+                mandateExpiresAt: mandateExpiresAt
+            })
         );
     }
 
@@ -393,6 +455,47 @@ contract InvoiceEscrow is ReentrancyGuard {
         return bondContexts[invoiceId];
     }
 
+    function paymentRequirementHash(uint256 invoiceId) public view returns (bytes32) {
+        Invoice storage invoice = _invoice(invoiceId);
+        return _paymentRequirementHash(invoiceId, invoice);
+    }
+
+    function paymentMandateDigest(
+        uint256 invoiceId,
+        address authorizedPayer,
+        bytes32 payerAgentHash,
+        bytes32 recipientAgentHash,
+        bytes32 mandateHash,
+        bytes32 policyHash,
+        uint64 slaDeadline,
+        uint64 mandateExpiresAt
+    ) public view returns (bytes32) {
+        return keccak256(
+            abi.encodePacked(
+                "\x19\x01",
+                eip712DomainSeparator(),
+                keccak256(
+                    abi.encode(
+                        PAYMENT_MANDATE_TYPEHASH,
+                        invoiceId,
+                        authorizedPayer,
+                        paymentRequirementHash(invoiceId),
+                        payerAgentHash,
+                        recipientAgentHash,
+                        mandateHash,
+                        policyHash,
+                        slaDeadline,
+                        mandateExpiresAt
+                    )
+                )
+            )
+        );
+    }
+
+    function eip712DomainSeparator() public view returns (bytes32) {
+        return keccak256(abi.encode(EIP712_DOMAIN_TYPEHASH, EIP712_NAME_HASH, EIP712_VERSION_HASH, block.chainid, address(this)));
+    }
+
     function settlementReceiptHash(uint256 invoiceId) public view returns (bytes32) {
         Invoice storage invoice = _invoice(invoiceId);
         AgentContext storage context = agentContexts[invoiceId];
@@ -421,7 +524,9 @@ contract InvoiceEscrow is ReentrancyGuard {
                 context.recipientAgentHash,
                 context.mandateHash,
                 context.policyHash,
-                context.slaDeadline
+                context.slaDeadline,
+                context.authorizedPayer,
+                context.mandateExpiresAt
             )
         );
         return keccak256(
@@ -444,6 +549,72 @@ contract InvoiceEscrow is ReentrancyGuard {
     function _invoiceView(uint256 invoiceId) private view returns (Invoice memory invoice) {
         if (invoiceId >= invoiceCount) revert InvoiceNotFound();
         invoice = invoices[invoiceId];
+    }
+
+    function _validateMandateAttach(uint256 invoiceId, uint64 slaDeadline) private view {
+        if (agentContexts[invoiceId].mandateHash != bytes32(0)) revert MandateAlreadyAttached();
+        if (slaDeadline != 0 && slaDeadline <= block.timestamp) revert InvalidSlaDeadline();
+    }
+
+    function _attachAgentContext(uint256 invoiceId, AgentContext memory context) private {
+        agentContexts[invoiceId] = context;
+        emit AgentMandateAttached(
+            invoiceId,
+            context.attachedBy,
+            context.payerAgentHash,
+            context.recipientAgentHash,
+            context.mandateHash,
+            context.policyHash,
+            context.slaDeadline,
+            context.authorizedPayer,
+            context.mandateExpiresAt
+        );
+    }
+
+    function _paymentRequirementHash(uint256 invoiceId, Invoice storage invoice) private view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                "ARBIFLOW_X402_ESCROW_REQUIREMENT_V1",
+                block.chainid,
+                address(this),
+                invoiceId,
+                invoice.recipient,
+                invoice.token,
+                invoice.amount,
+                invoice.dueAt,
+                invoice.timeout,
+                keccak256(bytes(invoice.metadataHash))
+            )
+        );
+    }
+
+    function _isValidSignature(address signer, bytes32 digest, bytes calldata signature) private view returns (bool) {
+        if (signer.code.length == 0) {
+            return _recoverSigner(digest, signature) == signer;
+        }
+
+        (bool success, bytes memory result) = signer.staticcall(
+            abi.encodeCall(IERC1271.isValidSignature, (digest, signature))
+        );
+        return success && result.length >= 32 && abi.decode(result, (bytes4)) == IERC1271.isValidSignature.selector;
+    }
+
+    function _recoverSigner(bytes32 digest, bytes calldata signature) private pure returns (address signer) {
+        if (signature.length != 65) return address(0);
+
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+        assembly {
+            r := calldataload(signature.offset)
+            s := calldataload(add(signature.offset, 0x20))
+            v := byte(0, calldataload(add(signature.offset, 0x40)))
+        }
+
+        if (uint256(s) > SECP256K1_HALF_ORDER) return address(0);
+        if (v < 27) v += 27;
+        if (v != 27 && v != 28) return address(0);
+        signer = ecrecover(digest, v, r, s);
     }
 
     function _settleServiceBond(
