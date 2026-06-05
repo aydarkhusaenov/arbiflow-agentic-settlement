@@ -48,13 +48,18 @@ Smart contract quality:
 
 - Explicit invoice state machine.
 - Reentrancy protection.
+- Checks-effects-interactions payout flow.
 - OpenZeppelin `SafeERC20`.
+- Exact ERC20 receive checks that reject fee-on-transfer underfunding.
 - Custom errors.
+- Immutable pre-payment agent mandates with future SLA validation.
 - No admin withdrawal path.
 - Counterparty-approved settlement split.
 - Optional provider service bond with SLA/evidence-based slashing.
 - Portable receipt hash over final settlement context.
-- Tests for success, failure, timeout, authorization, ETH, ERC20, mandate, receipt, service bond, and split-settlement paths.
+- Tests for success, failure, timeout, authorization, ETH, ERC20, mandate, receipt, service bond, fee-on-transfer rejection, and split-settlement paths.
+- Production dependency audit currently reports no known vulnerabilities.
+- Slither static analysis reports no reentrancy findings after hardening; remaining findings are expected timestamp deadline checks and checked ETH transfer calls.
 
 Product-market fit:
 

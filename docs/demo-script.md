@@ -14,23 +14,25 @@ Use this script for screenshots or a live walkthrough. No personal video is requ
 
 ## Flow 2: Evidence And Dispute
 
-1. Create and pay a second invoice.
-2. Attach an agent mandate and SLA context.
+1. Create a second invoice.
+2. Attach an agent mandate and SLA context before payment.
 3. Recipient posts a service bond.
-4. Recipient attaches `ipfs://arbiflow-delivery-proof`.
-5. Payer requests a refund.
-6. Agent shows refund window, delivery evidence, timeout, mandate context, bond status, and settlement options.
-7. Recipient proposes a partial split, for example `80%` recipient and `20%` payer refund.
-8. Payer accepts the settlement.
-9. Show final state `Settled`, bond returned, and the receipt hash that can feed reputation later.
+4. Connect a payer wallet and fund the invoice.
+5. Recipient attaches `ipfs://arbiflow-delivery-proof`.
+6. Payer requests a refund.
+7. Agent shows refund window, delivery evidence, timeout, mandate context, bond status, and settlement options.
+8. Recipient proposes a partial split, for example `80%` recipient and `20%` payer refund.
+9. Payer accepts the settlement.
+10. Show final state `Settled`, bond returned, and the receipt hash that can feed reputation later.
 
 ## Flow 3: Timeout Protection
 
-1. Create and pay an invoice with a short timeout on a local chain.
-2. Payer requests refund.
-3. Before timeout, show that payer refund is blocked.
-4. After timeout, show that payer can refund.
-5. If no delivery evidence exists and the SLA is missed, show provider bond slashed to payer.
+1. Create an invoice with a short timeout on a local chain.
+2. Attach an SLA mandate before payment and have recipient post a small bond.
+3. Payer funds the invoice and later requests refund.
+4. Before timeout, show that payer refund is blocked.
+5. After timeout, show that payer can refund.
+6. If no timely delivery evidence exists and the SLA is missed, show provider bond slashed to payer.
 
 ## What To Emphasize
 

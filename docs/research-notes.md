@@ -32,6 +32,13 @@ ArbiFlow is the settlement layer around agentic payment:
 - optional provider service bonds that can be slashed only by objective SLA/evidence conditions
 - portable receipt hash when the invoice closes
 
+## Security Research Applied
+
+- Solidity security guidance pushed the contract toward narrow state transitions, reentrancy guards, and checks-effects-interactions around payout paths.
+- OpenZeppelin `SafeERC20` is used for ERC20 compatibility, but ArbiFlow adds exact balance-delta checks so fee-on-transfer tokens cannot silently underfund invoice escrow or service bonds.
+- Slither was used as a static-analysis pass. Its reentrancy findings were addressed by settling state, bond context, receipt hashes, and events before outbound transfers.
+- Dependency audit results drove the frontend upgrade to patched Next.js and targeted pnpm overrides for vulnerable transitive packages.
+
 ## Sources
 
 - ERC-8004: https://eips.ethereum.org/EIPS/eip-8004
@@ -39,3 +46,7 @@ ArbiFlow is the settlement layer around agentic payment:
 - Google Cloud AP2 announcement: https://cloud.google.com/blog/products/ai-machine-learning/announcing-agents-to-payments-ap2-protocol
 - AP2 prompt-injection red-team paper: https://arxiv.org/abs/2601.22569
 - AP2 zero-trust runtime verification paper: https://arxiv.org/abs/2602.06345
+- Solidity security considerations: https://docs.soliditylang.org/en/latest/security-considerations.html
+- OpenZeppelin Contracts security utilities: https://docs.openzeppelin.com/contracts/5.x/api/security
+- OpenZeppelin SafeERC20: https://docs.openzeppelin.com/contracts/5.x/api/token/erc20#SafeERC20
+- Slither detector documentation: https://github.com/crytic/slither/wiki/Detector-Documentation

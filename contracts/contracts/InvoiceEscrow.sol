@@ -29,16 +29,13 @@ contract InvoiceEscrow is ReentrancyGuard {
         uint64 timeout;
         uint64 refundRequestedAt;
         uint64 settlementProposedAt;
+        uint64 deliveryMarkedAt;
         State state;
         string metadataHash;
         string deliveryHash;
         string settlementMemoHash;
         address settlementProposedBy;
         uint256 settlementRecipientAmount;
-        uint256 serviceBondAmount;
-        uint256 resolvedBondAmount;
-        address resolvedBondRecipient;
-        bool serviceBondSlashed;
     }
 
     struct AgentContext {
@@ -51,9 +48,17 @@ contract InvoiceEscrow is ReentrancyGuard {
         address attachedBy;
     }
 
+    struct BondContext {
+        uint256 activeAmount;
+        uint256 resolvedAmount;
+        address resolvedRecipient;
+        bool slashed;
+    }
+
     uint256 public invoiceCount;
     mapping(uint256 invoiceId => Invoice) private invoices;
     mapping(uint256 invoiceId => AgentContext) private agentContexts;
+    mapping(uint256 invoiceId => BondContext) private bondContexts;
 
     event InvoiceCreated(
         uint256 indexed invoiceId,
@@ -115,6 +120,8 @@ contract InvoiceEscrow is ReentrancyGuard {
     error NoSettlementProposal();
     error InvalidMandate();
     error InvalidBondAmount();
+    error MandateAlreadyAttached();
+    error InvalidSlaDeadline();
 
     function createInvoice(
         address recipient,
@@ -123,7 +130,7 @@ contract InvoiceEscrow is ReentrancyGuard {
         string calldata metadataHash,
         uint64 dueAt,
         uint64 timeout
-    ) external returns (uint256 invoiceId) {
+    ) external nonReentrant returns (uint256 invoiceId) {
         if (recipient == address(0)) revert InvalidRecipient();
         if (amount == 0) revert InvalidAmount();
         if (timeout == 0) revert InvalidTimeout();
@@ -140,16 +147,13 @@ contract InvoiceEscrow is ReentrancyGuard {
             timeout: timeout,
             refundRequestedAt: 0,
             settlementProposedAt: 0,
+            deliveryMarkedAt: 0,
             state: State.Created,
             metadataHash: metadataHash,
             deliveryHash: "",
             settlementMemoHash: "",
             settlementProposedBy: address(0),
-            settlementRecipientAmount: 0,
-            serviceBondAmount: 0,
-            resolvedBondAmount: 0,
-            resolvedBondRecipient: address(0),
-            serviceBondSlashed: false
+            settlementRecipientAmount: 0
         });
 
         emit InvoiceCreated(invoiceId, msg.sender, recipient, token, amount, dueAt, timeout, metadataHash);
@@ -160,16 +164,16 @@ contract InvoiceEscrow is ReentrancyGuard {
         if (invoice.state != State.Created) revert InvalidState(State.Created, invoice.state);
         if (invoice.dueAt != 0 && block.timestamp > invoice.dueAt) revert InvoicePastDue();
 
-        invoice.payer = msg.sender;
-        invoice.paidAt = uint64(block.timestamp);
-        invoice.state = State.Paid;
-
         if (invoice.token == address(0)) {
             if (msg.value != invoice.amount) revert IncorrectPayment();
         } else {
             if (msg.value != 0) revert IncorrectPayment();
-            IERC20(invoice.token).safeTransferFrom(msg.sender, address(this), invoice.amount);
+            _pullExactToken(invoice.token, msg.sender, invoice.amount);
         }
+
+        invoice.payer = msg.sender;
+        invoice.paidAt = uint64(block.timestamp);
+        invoice.state = State.Paid;
 
         emit InvoicePaid(invoiceId, msg.sender, invoice.token, invoice.amount);
     }
@@ -181,14 +185,16 @@ contract InvoiceEscrow is ReentrancyGuard {
         bytes32 mandateHash,
         bytes32 policyHash,
         uint64 slaDeadline
-    ) external {
+    ) external nonReentrant {
         Invoice storage invoice = _invoice(invoiceId);
         if (
             msg.sender != invoice.creator && msg.sender != invoice.recipient
                 && (invoice.payer == address(0) || msg.sender != invoice.payer)
         ) revert Unauthorized();
-        if (invoice.state >= State.Released) revert InvalidState(State.Created, invoice.state);
+        if (invoice.state != State.Created) revert InvalidState(State.Created, invoice.state);
         if (mandateHash == bytes32(0)) revert InvalidMandate();
+        if (agentContexts[invoiceId].mandateHash != bytes32(0)) revert MandateAlreadyAttached();
+        if (slaDeadline != 0 && slaDeadline <= block.timestamp) revert InvalidSlaDeadline();
 
         agentContexts[invoiceId] = AgentContext({
             payerAgentHash: payerAgentHash,
@@ -214,17 +220,17 @@ contract InvoiceEscrow is ReentrancyGuard {
     function postServiceBond(uint256 invoiceId, uint256 amount) external payable nonReentrant {
         Invoice storage invoice = _invoice(invoiceId);
         if (msg.sender != invoice.recipient) revert Unauthorized();
-        if (invoice.state >= State.Released) revert InvalidState(State.Created, invoice.state);
+        if (_isFinal(invoice.state)) revert InvalidState(State.Created, invoice.state);
         if (amount == 0) revert InvalidBondAmount();
-
-        invoice.serviceBondAmount += amount;
 
         if (invoice.token == address(0)) {
             if (msg.value != amount) revert IncorrectPayment();
         } else {
             if (msg.value != 0) revert IncorrectPayment();
-            IERC20(invoice.token).safeTransferFrom(msg.sender, address(this), amount);
+            _pullExactToken(invoice.token, msg.sender, amount);
         }
+
+        bondContexts[invoiceId].activeAmount += amount;
 
         emit ServiceBondPosted(invoiceId, msg.sender, invoice.token, amount);
     }
@@ -233,19 +239,29 @@ contract InvoiceEscrow is ReentrancyGuard {
         Invoice storage invoice = _invoice(invoiceId);
         if (invoice.state != State.Paid) revert InvalidState(State.Paid, invoice.state);
 
+        AgentContext storage context = agentContexts[invoiceId];
         bool payerRelease = msg.sender == invoice.payer;
-        bool recipientTimeoutRelease = msg.sender == invoice.recipient && block.timestamp >= invoice.paidAt + invoice.timeout;
+        bool recipientTimeoutRelease = msg.sender == invoice.recipient && block.timestamp >= invoice.paidAt + invoice.timeout
+            && _releaseEvidenceSatisfied(invoice, context);
         if (!payerRelease && !recipientTimeoutRelease) revert Unauthorized();
 
-        invoice.state = State.Released;
-        _transferOut(invoice.token, invoice.recipient, invoice.amount);
-        _resolveServiceBond(invoiceId, invoice, true);
+        address token = invoice.token;
+        address payer = invoice.payer;
+        address recipient = invoice.recipient;
+        uint256 amount = invoice.amount;
 
-        emit InvoiceReleased(invoiceId, invoice.payer, invoice.recipient, invoice.amount);
-        emit SettlementReceiptFinalized(invoiceId, settlementReceiptHash(invoiceId), invoice.state);
+        invoice.state = State.Released;
+        (address bondRecipient, uint256 bondAmount) = _settleServiceBond(invoiceId, invoice, true);
+        bytes32 receiptHash = settlementReceiptHash(invoiceId);
+
+        emit InvoiceReleased(invoiceId, payer, recipient, amount);
+        emit SettlementReceiptFinalized(invoiceId, receiptHash, invoice.state);
+
+        _transferOut(token, recipient, amount);
+        _transferOutIfNeeded(token, bondRecipient, bondAmount);
     }
 
-    function requestRefund(uint256 invoiceId) external {
+    function requestRefund(uint256 invoiceId) external nonReentrant {
         Invoice storage invoice = _invoice(invoiceId);
         if (invoice.state != State.Paid) revert InvalidState(State.Paid, invoice.state);
         if (msg.sender != invoice.payer) revert Unauthorized();
@@ -256,7 +272,7 @@ contract InvoiceEscrow is ReentrancyGuard {
         emit RefundRequested(invoiceId, msg.sender, uint64(block.timestamp) + invoice.timeout);
     }
 
-    function markDelivered(uint256 invoiceId, string calldata deliveryHash) external {
+    function markDelivered(uint256 invoiceId, string calldata deliveryHash) external nonReentrant {
         Invoice storage invoice = _invoice(invoiceId);
         if (invoice.state != State.Paid && invoice.state != State.RefundRequested) {
             revert InvalidState(State.Paid, invoice.state);
@@ -264,6 +280,7 @@ contract InvoiceEscrow is ReentrancyGuard {
         if (msg.sender != invoice.recipient) revert Unauthorized();
 
         invoice.deliveryHash = deliveryHash;
+        invoice.deliveryMarkedAt = uint64(block.timestamp);
 
         emit DeliveryMarked(invoiceId, msg.sender, deliveryHash);
     }
@@ -272,7 +289,7 @@ contract InvoiceEscrow is ReentrancyGuard {
         uint256 invoiceId,
         uint256 recipientAmount,
         string calldata memoHash
-    ) external {
+    ) external nonReentrant {
         Invoice storage invoice = _invoice(invoiceId);
         if (invoice.state != State.Paid && invoice.state != State.RefundRequested) {
             revert InvalidState(State.Paid, invoice.state);
@@ -299,18 +316,24 @@ contract InvoiceEscrow is ReentrancyGuard {
 
         uint256 recipientAmount = invoice.settlementRecipientAmount;
         uint256 payerAmount = invoice.amount - recipientAmount;
-        invoice.state = State.Settled;
+        address token = invoice.token;
+        address recipient = invoice.recipient;
+        address payer = invoice.payer;
 
-        if (recipientAmount != 0) {
-            _transferOut(invoice.token, invoice.recipient, recipientAmount);
-        }
-        if (payerAmount != 0) {
-            _transferOut(invoice.token, invoice.payer, payerAmount);
-        }
-        _resolveServiceBond(invoiceId, invoice, true);
+        invoice.state = State.Settled;
+        (address bondRecipient, uint256 bondAmount) = _settleServiceBond(invoiceId, invoice, true);
+        bytes32 receiptHash = settlementReceiptHash(invoiceId);
 
         emit SettlementAccepted(invoiceId, msg.sender, recipientAmount, payerAmount);
-        emit SettlementReceiptFinalized(invoiceId, settlementReceiptHash(invoiceId), invoice.state);
+        emit SettlementReceiptFinalized(invoiceId, receiptHash, invoice.state);
+
+        if (recipientAmount != 0) {
+            _transferOut(token, recipient, recipientAmount);
+        }
+        if (payerAmount != 0) {
+            _transferOut(token, payer, payerAmount);
+        }
+        _transferOutIfNeeded(token, bondRecipient, bondAmount);
     }
 
     function refund(uint256 invoiceId) external nonReentrant {
@@ -327,12 +350,17 @@ contract InvoiceEscrow is ReentrancyGuard {
 
         address payer = invoice.payer;
         uint256 amount = invoice.amount;
+        address token = invoice.token;
+
         invoice.state = State.Refunded;
-        _transferOut(invoice.token, payer, amount);
-        _resolveServiceBond(invoiceId, invoice, false);
+        (address bondRecipient, uint256 bondAmount) = _settleServiceBond(invoiceId, invoice, false);
+        bytes32 receiptHash = settlementReceiptHash(invoiceId);
 
         emit InvoiceRefunded(invoiceId, payer, amount);
-        emit SettlementReceiptFinalized(invoiceId, settlementReceiptHash(invoiceId), invoice.state);
+        emit SettlementReceiptFinalized(invoiceId, receiptHash, invoice.state);
+
+        _transferOut(token, payer, amount);
+        _transferOutIfNeeded(token, bondRecipient, bondAmount);
     }
 
     function cancelUnpaid(uint256 invoiceId) external nonReentrant {
@@ -340,11 +368,15 @@ contract InvoiceEscrow is ReentrancyGuard {
         if (invoice.state != State.Created) revert InvalidState(State.Created, invoice.state);
         if (msg.sender != invoice.creator && msg.sender != invoice.recipient) revert Unauthorized();
 
+        address token = invoice.token;
         invoice.state = State.Cancelled;
-        _resolveServiceBond(invoiceId, invoice, true);
+        (address bondRecipient, uint256 bondAmount) = _settleServiceBond(invoiceId, invoice, true);
+        bytes32 receiptHash = settlementReceiptHash(invoiceId);
 
         emit InvoiceCancelled(invoiceId);
-        emit SettlementReceiptFinalized(invoiceId, settlementReceiptHash(invoiceId), invoice.state);
+        emit SettlementReceiptFinalized(invoiceId, receiptHash, invoice.state);
+
+        _transferOutIfNeeded(token, bondRecipient, bondAmount);
     }
 
     function getInvoice(uint256 invoiceId) external view returns (Invoice memory) {
@@ -356,9 +388,15 @@ contract InvoiceEscrow is ReentrancyGuard {
         return agentContexts[invoiceId];
     }
 
+    function getBondContext(uint256 invoiceId) external view returns (BondContext memory) {
+        _invoiceView(invoiceId);
+        return bondContexts[invoiceId];
+    }
+
     function settlementReceiptHash(uint256 invoiceId) public view returns (bytes32) {
         Invoice storage invoice = _invoice(invoiceId);
         AgentContext storage context = agentContexts[invoiceId];
+        BondContext storage bond = bondContexts[invoiceId];
         bytes32 invoiceHash = keccak256(
             abi.encode(
                 invoice.creator,
@@ -369,11 +407,12 @@ contract InvoiceEscrow is ReentrancyGuard {
                 invoice.state,
                 invoice.metadataHash,
                 invoice.deliveryHash,
+                invoice.deliveryMarkedAt,
                 invoice.settlementMemoHash,
                 invoice.settlementRecipientAmount,
-                invoice.resolvedBondAmount,
-                invoice.resolvedBondRecipient,
-                invoice.serviceBondSlashed
+                bond.resolvedAmount,
+                bond.resolvedRecipient,
+                bond.slashed
             )
         );
         bytes32 contextHash = keccak256(
@@ -407,24 +446,48 @@ contract InvoiceEscrow is ReentrancyGuard {
         invoice = invoices[invoiceId];
     }
 
-    function _resolveServiceBond(uint256 invoiceId, Invoice storage invoice, bool successfulOutcome) private {
-        uint256 amount = invoice.serviceBondAmount;
-        if (amount == 0) return;
+    function _settleServiceBond(
+        uint256 invoiceId,
+        Invoice storage invoice,
+        bool successfulOutcome
+    ) private returns (address beneficiary, uint256 amount) {
+        BondContext storage bond = bondContexts[invoiceId];
+        amount = bond.activeAmount;
+        if (amount == 0) return (address(0), 0);
 
         AgentContext storage context = agentContexts[invoiceId];
         bool missedSla = context.slaDeadline != 0 && block.timestamp > context.slaDeadline;
-        bool hasDeliveryEvidence = bytes(invoice.deliveryHash).length != 0;
-        bool slashBond = !successfulOutcome && missedSla && !hasDeliveryEvidence && invoice.payer != address(0);
-        address beneficiary = slashBond ? invoice.payer : invoice.recipient;
+        bool slashBond = !successfulOutcome && missedSla && !_hasTimelyDelivery(invoice, context) && invoice.payer != address(0);
+        beneficiary = slashBond ? invoice.payer : invoice.recipient;
 
-        invoice.serviceBondAmount = 0;
-        invoice.resolvedBondAmount = amount;
-        invoice.resolvedBondRecipient = beneficiary;
-        invoice.serviceBondSlashed = slashBond;
-
-        _transferOut(invoice.token, beneficiary, amount);
+        bond.activeAmount = 0;
+        bond.resolvedAmount = amount;
+        bond.resolvedRecipient = beneficiary;
+        bond.slashed = slashBond;
 
         emit ServiceBondResolved(invoiceId, beneficiary, amount, slashBond);
+    }
+
+    function _releaseEvidenceSatisfied(Invoice storage invoice, AgentContext storage context) private view returns (bool) {
+        if (context.slaDeadline == 0) return true;
+        return _hasTimelyDelivery(invoice, context);
+    }
+
+    function _hasTimelyDelivery(Invoice storage invoice, AgentContext storage context) private view returns (bool) {
+        return bytes(invoice.deliveryHash).length != 0
+            && invoice.deliveryMarkedAt != 0
+            && (context.slaDeadline == 0 || invoice.deliveryMarkedAt <= context.slaDeadline);
+    }
+
+    function _isFinal(State state) private pure returns (bool) {
+        return state == State.Released || state == State.Refunded || state == State.Cancelled || state == State.Settled;
+    }
+
+    function _pullExactToken(address token, address from, uint256 amount) private {
+        uint256 balanceBefore = IERC20(token).balanceOf(address(this));
+        IERC20(token).safeTransferFrom(from, address(this), amount);
+        uint256 balanceAfter = IERC20(token).balanceOf(address(this));
+        if (balanceAfter - balanceBefore != amount) revert IncorrectPayment();
     }
 
     function _transferOut(address token, address to, uint256 amount) private {
@@ -434,5 +497,10 @@ contract InvoiceEscrow is ReentrancyGuard {
         } else {
             IERC20(token).safeTransfer(to, amount);
         }
+    }
+
+    function _transferOutIfNeeded(address token, address to, uint256 amount) private {
+        if (amount == 0) return;
+        _transferOut(token, to, amount);
     }
 }

@@ -27,16 +27,13 @@ export const invoiceEscrowAbi = [
           { name: "timeout", type: "uint64", internalType: "uint64" },
           { name: "refundRequestedAt", type: "uint64", internalType: "uint64" },
           { name: "settlementProposedAt", type: "uint64", internalType: "uint64" },
+          { name: "deliveryMarkedAt", type: "uint64", internalType: "uint64" },
           { name: "state", type: "uint8", internalType: "enum InvoiceEscrow.State" },
           { name: "metadataHash", type: "string", internalType: "string" },
           { name: "deliveryHash", type: "string", internalType: "string" },
           { name: "settlementMemoHash", type: "string", internalType: "string" },
           { name: "settlementProposedBy", type: "address", internalType: "address" },
-          { name: "settlementRecipientAmount", type: "uint256", internalType: "uint256" },
-          { name: "serviceBondAmount", type: "uint256", internalType: "uint256" },
-          { name: "resolvedBondAmount", type: "uint256", internalType: "uint256" },
-          { name: "resolvedBondRecipient", type: "address", internalType: "address" },
-          { name: "serviceBondSlashed", type: "bool", internalType: "bool" }
+          { name: "settlementRecipientAmount", type: "uint256", internalType: "uint256" }
         ]
       }
     ]
@@ -69,6 +66,25 @@ export const invoiceEscrowAbi = [
     stateMutability: "view",
     inputs: [{ name: "invoiceId", type: "uint256", internalType: "uint256" }],
     outputs: [{ name: "", type: "bytes32", internalType: "bytes32" }]
+  },
+  {
+    type: "function",
+    name: "getBondContext",
+    stateMutability: "view",
+    inputs: [{ name: "invoiceId", type: "uint256", internalType: "uint256" }],
+    outputs: [
+      {
+        name: "",
+        type: "tuple",
+        internalType: "struct InvoiceEscrow.BondContext",
+        components: [
+          { name: "activeAmount", type: "uint256", internalType: "uint256" },
+          { name: "resolvedAmount", type: "uint256", internalType: "uint256" },
+          { name: "resolvedRecipient", type: "address", internalType: "address" },
+          { name: "slashed", type: "bool", internalType: "bool" }
+        ]
+      }
+    ]
   },
   {
     type: "function",

@@ -54,6 +54,13 @@ type MandateForm = {
   slaHours: string;
 };
 
+type BondContextRecord = {
+  activeAmount: bigint;
+  resolvedAmount: bigint;
+  resolvedRecipient: `0x${string}`;
+  slashed: boolean;
+};
+
 const defaultForm: CreateForm = {
   recipient: "",
   token: "",
@@ -183,25 +190,51 @@ export default function Home() {
     query: { enabled: Boolean(contractAddress && selectedInvoice) }
   });
 
+  const {
+    data: selectedBondContextData,
+    refetch: refetchBondContext
+  } = useReadContract({
+    address: contractAddress,
+    abi: invoiceEscrowAbi,
+    functionName: "getBondContext",
+    args: selectedInvoice ? [selectedInvoice.id] : undefined,
+    query: { enabled: Boolean(contractAddress && selectedInvoice) }
+  });
+
   const selectedAgentContext = selectedAgentContextData ? toAgentContextRecord(selectedAgentContextData) : undefined;
-  const assessment = selectedInvoice ? assessInvoice(selectedInvoice, address, undefined, selectedAgentContext, selectedReceiptHash) : null;
+  const selectedBondContext = selectedBondContextData ? toBondContextRecord(selectedBondContextData) : undefined;
+  const selectedInvoiceWithBond =
+    selectedInvoice && selectedBondContext
+      ? {
+          ...selectedInvoice,
+          serviceBondAmount: selectedBondContext.activeAmount,
+          resolvedBondAmount: selectedBondContext.resolvedAmount,
+          resolvedBondRecipient: selectedBondContext.resolvedRecipient,
+          serviceBondSlashed: selectedBondContext.slashed
+        }
+      : selectedInvoice;
+  const assessment = selectedInvoiceWithBond
+    ? assessInvoice(selectedInvoiceWithBond, address, undefined, selectedAgentContext, selectedReceiptHash)
+    : null;
   const wrongChain = isConnected && chainId !== arbitrumSepolia.id && chainId !== hardhat.id;
   const explorerBase = chainId === hardhat.id ? "" : "https://sepolia.arbiscan.io";
   const selectedInvoiceId = selectedInvoice?.id.toString();
-  const isSelectedActive = selectedInvoice ? selectedInvoice.state === 1 || selectedInvoice.state === 2 : false;
+  const isSelectedActive = selectedInvoiceWithBond ? selectedInvoiceWithBond.state === 1 || selectedInvoiceWithBond.state === 2 : false;
   const isSelectedRecipient = Boolean(
-    selectedInvoice && address && selectedInvoice.recipient.toLowerCase() === address.toLowerCase()
+    selectedInvoiceWithBond && address && selectedInvoiceWithBond.recipient.toLowerCase() === address.toLowerCase()
   );
-  const isSelectedPayer = Boolean(selectedInvoice && address && selectedInvoice.payer.toLowerCase() === address.toLowerCase());
-  const canProposeSettlement = Boolean(selectedInvoice && isSelectedActive && (isSelectedRecipient || isSelectedPayer));
-  const settlementOpen = Boolean(selectedInvoice && selectedInvoice.settlementProposedBy !== zeroAddress);
+  const isSelectedPayer = Boolean(
+    selectedInvoiceWithBond && address && selectedInvoiceWithBond.payer.toLowerCase() === address.toLowerCase()
+  );
+  const canProposeSettlement = Boolean(selectedInvoiceWithBond && isSelectedActive && (isSelectedRecipient || isSelectedPayer));
+  const settlementOpen = Boolean(selectedInvoiceWithBond && selectedInvoiceWithBond.settlementProposedBy !== zeroAddress);
   const mandateAttached = Boolean(selectedAgentContext && selectedAgentContext.mandateHash !== zeroHash);
   const canAcceptSettlement = Boolean(
-    selectedInvoice &&
+    selectedInvoiceWithBond &&
       settlementOpen &&
       (isSelectedRecipient || isSelectedPayer) &&
       address &&
-      selectedInvoice.settlementProposedBy.toLowerCase() !== address.toLowerCase()
+      selectedInvoiceWithBond.settlementProposedBy.toLowerCase() !== address.toLowerCase()
   );
 
   useEffect(() => {
@@ -220,6 +253,7 @@ export default function Home() {
     await refetchInvoices();
     await refetchAgentContext();
     await refetchReceiptHash();
+    await refetchBondContext();
   }
 
   async function submitCreate(event: FormEvent<HTMLFormElement>) {
@@ -324,7 +358,7 @@ export default function Home() {
       return;
     }
     const slaHours = Math.max(0, Number(mandateForm.slaHours || "0"));
-    const slaDeadline = BigInt(Math.floor(Date.now() / 1000) + Math.round(slaHours * HOUR));
+    const slaDeadline = slaHours > 0 ? BigInt(Math.floor(Date.now() / 1000) + Math.round(slaHours * HOUR)) : 0n;
     await runWrite("attachAgentMandate", [
       invoice.id,
       hashOrZero(mandateForm.payerAgent),
@@ -572,33 +606,33 @@ export default function Home() {
             <ShieldCheck aria-hidden />
           </div>
 
-          {selectedInvoice && assessment ? (
+          {selectedInvoiceWithBond && assessment ? (
             <>
               <div className={`agentCallout ${assessment.risk}`}>
-                <span>{stateLabels[selectedInvoice.state]}</span>
+                <span>{stateLabels[selectedInvoiceWithBond.state]}</span>
                 <p>{assessment.headline}</p>
               </div>
 
               <dl className="detailList">
                 <div>
                   <dt>Recipient</dt>
-                  <dd>{shortAddress(selectedInvoice.recipient)}</dd>
+                  <dd>{shortAddress(selectedInvoiceWithBond.recipient)}</dd>
                 </div>
                 <div>
                   <dt>Payer</dt>
-                  <dd>{selectedInvoice.payer === zeroAddress ? "open" : shortAddress(selectedInvoice.payer)}</dd>
+                  <dd>{selectedInvoiceWithBond.payer === zeroAddress ? "open" : shortAddress(selectedInvoiceWithBond.payer)}</dd>
                 </div>
                 <div>
                   <dt>Due</dt>
-                  <dd>{formatTimestamp(selectedInvoice.dueAt)}</dd>
+                  <dd>{formatTimestamp(selectedInvoiceWithBond.dueAt)}</dd>
                 </div>
                 <div>
                   <dt>Timeout</dt>
-                  <dd>{formatDuration(selectedInvoice.timeout)}</dd>
+                  <dd>{formatDuration(selectedInvoiceWithBond.timeout)}</dd>
                 </div>
                 <div>
                   <dt>Delivery</dt>
-                  <dd>{selectedInvoice.deliveryHash ? "attached" : "missing"}</dd>
+                  <dd>{selectedInvoiceWithBond.deliveryHash ? "attached" : "missing"}</dd>
                 </div>
                 <div>
                   <dt>Settlement</dt>
@@ -614,7 +648,7 @@ export default function Home() {
                 </div>
                 <div>
                   <dt>Bond</dt>
-                  <dd>{formatBondStatus(selectedInvoice)}</dd>
+                  <dd>{formatBondStatus(selectedInvoiceWithBond)}</dd>
                 </div>
               </dl>
 
@@ -626,7 +660,7 @@ export default function Home() {
                     type="button"
                     disabled={!action.enabled || !isConnected || Boolean(pendingAction)}
                     title={action.reason}
-                    onClick={() => runAction(action.id, selectedInvoice)}
+                    onClick={() => runAction(action.id, selectedInvoiceWithBond)}
                   >
                     {actionIcon(action.id, pendingAction)}
                     {action.label}
@@ -683,9 +717,9 @@ export default function Home() {
                 <button
                   className="button action"
                   type="button"
-                  disabled={!isConnected || !selectedInvoice || selectedInvoice.state >= 3 || Boolean(pendingAction)}
-                  title="Attach a hashed agent mandate, identity references, risk policy, and SLA deadline."
-                  onClick={() => submitMandate(selectedInvoice)}
+                  disabled={!isConnected || !selectedInvoiceWithBond || selectedInvoiceWithBond.state !== 0 || Boolean(pendingAction)}
+                  title="Attach a hashed agent mandate, identity references, risk policy, and optional SLA deadline before payment."
+                  onClick={() => submitMandate(selectedInvoiceWithBond)}
                 >
                   {pendingAction === "attachAgentMandate" ? <Loader2 className="spin" aria-hidden /> : <ShieldCheck aria-hidden />}
                   Attach mandate
@@ -712,17 +746,17 @@ export default function Home() {
                 <button
                   className="button action"
                   type="button"
-                  disabled={!isConnected || !isSelectedRecipient || selectedInvoice.state >= 3 || Boolean(pendingAction)}
-                  title="Recipient can post an optional service bond. It returns on clean settlement and can be slashed if SLA is missed without delivery evidence."
-                  onClick={() => submitServiceBond(selectedInvoice)}
+                  disabled={!isConnected || !isSelectedRecipient || selectedInvoiceWithBond.state >= 3 || Boolean(pendingAction)}
+                  title="Recipient can post an optional service bond. It returns on clean settlement and can be slashed if SLA is missed without timely delivery evidence."
+                  onClick={() => submitServiceBond(selectedInvoiceWithBond)}
                 >
                   {pendingAction === "postServiceBond" ? <Loader2 className="spin" aria-hidden /> : <ShieldCheck aria-hidden />}
                   Post bond
                 </button>
                 <div className="proposalBox">
                   <span>SLA bond status</span>
-                  <strong>{formatBondStatus(selectedInvoice)}</strong>
-                  <small>{formatBondDetail(selectedInvoice)}</small>
+                  <strong>{formatBondStatus(selectedInvoiceWithBond)}</strong>
+                  <small>{formatBondDetail(selectedInvoiceWithBond)}</small>
                 </div>
               </section>
 
@@ -741,7 +775,7 @@ export default function Home() {
                   type="button"
                   disabled={!isConnected || !isSelectedRecipient || !isSelectedActive || Boolean(pendingAction)}
                   title="Recipient can attach delivery evidence while the invoice is paid or refund requested."
-                  onClick={() => submitDelivery(selectedInvoice)}
+                  onClick={() => submitDelivery(selectedInvoiceWithBond)}
                 >
                   {pendingAction === "markDelivered" ? <Loader2 className="spin" aria-hidden /> : <CheckCircle2 aria-hidden />}
                   Mark delivered
@@ -773,7 +807,7 @@ export default function Home() {
                   type="button"
                   disabled={!isConnected || !canProposeSettlement || Boolean(pendingAction)}
                   title="Payer or recipient can propose a split settlement for the counterparty to accept."
-                  onClick={() => submitSettlement(selectedInvoice)}
+                  onClick={() => submitSettlement(selectedInvoiceWithBond)}
                 >
                   {pendingAction === "proposeSettlement" ? <Loader2 className="spin" aria-hidden /> : <Send aria-hidden />}
                   Propose split
@@ -782,13 +816,13 @@ export default function Home() {
                 {settlementOpen ? (
                   <div className="proposalBox">
                     <span>Open split proposal</span>
-                    <strong>{formatSettlement(selectedInvoice)}</strong>
+                    <strong>{formatSettlement(selectedInvoiceWithBond)}</strong>
                     <button
                       className="button primary"
                       type="button"
                       disabled={!isConnected || !canAcceptSettlement || Boolean(pendingAction)}
                       title="Only the counterparty can accept a settlement proposal."
-                      onClick={() => runWrite("acceptSettlement", [selectedInvoice.id])}
+                      onClick={() => runWrite("acceptSettlement", [selectedInvoiceWithBond.id])}
                     >
                       {pendingAction === "acceptSettlement" ? <Loader2 className="spin" aria-hidden /> : <CheckCircle2 aria-hidden />}
                       Accept split
@@ -874,22 +908,29 @@ function toInvoiceRecord(id: bigint, raw: unknown): InvoiceRecord {
     timeout: BigInt(value.timeout as bigint | string | number | undefined ?? (value[7] as bigint)),
     refundRequestedAt: BigInt(value.refundRequestedAt as bigint | string | number | undefined ?? (value[8] as bigint)),
     settlementProposedAt: BigInt(value.settlementProposedAt as bigint | string | number | undefined ?? (value[9] as bigint)),
-    state: Number(value.state ?? value[10]),
-    metadataHash: String(value.metadataHash ?? value[11] ?? ""),
-    deliveryHash: String(value.deliveryHash ?? value[12] ?? ""),
-    settlementMemoHash: String(value.settlementMemoHash ?? value[13] ?? ""),
-    settlementProposedBy: (value.settlementProposedBy ?? value[14] ?? zeroAddress) as `0x${string}`,
+    deliveryMarkedAt: BigInt(value.deliveryMarkedAt as bigint | string | number | undefined ?? (value[10] as bigint)),
+    state: Number(value.state ?? value[11]),
+    metadataHash: String(value.metadataHash ?? value[12] ?? ""),
+    deliveryHash: String(value.deliveryHash ?? value[13] ?? ""),
+    settlementMemoHash: String(value.settlementMemoHash ?? value[14] ?? ""),
+    settlementProposedBy: (value.settlementProposedBy ?? value[15] ?? zeroAddress) as `0x${string}`,
     settlementRecipientAmount: BigInt(
-      value.settlementRecipientAmount as bigint | string | number | undefined ?? (value[15] as bigint | undefined) ?? 0n
+      value.settlementRecipientAmount as bigint | string | number | undefined ?? (value[16] as bigint | undefined) ?? 0n
     ),
-    serviceBondAmount: BigInt(
-      value.serviceBondAmount as bigint | string | number | undefined ?? (value[16] as bigint | undefined) ?? 0n
-    ),
-    resolvedBondAmount: BigInt(
-      value.resolvedBondAmount as bigint | string | number | undefined ?? (value[17] as bigint | undefined) ?? 0n
-    ),
-    resolvedBondRecipient: (value.resolvedBondRecipient ?? value[18] ?? zeroAddress) as `0x${string}`,
-    serviceBondSlashed: Boolean(value.serviceBondSlashed ?? value[19] ?? false)
+    serviceBondAmount: 0n,
+    resolvedBondAmount: 0n,
+    resolvedBondRecipient: zeroAddress,
+    serviceBondSlashed: false
+  };
+}
+
+function toBondContextRecord(raw: unknown): BondContextRecord {
+  const value = raw as Record<string, unknown> & readonly unknown[];
+  return {
+    activeAmount: BigInt(value.activeAmount as bigint | string | number | undefined ?? (value[0] as bigint | undefined) ?? 0n),
+    resolvedAmount: BigInt(value.resolvedAmount as bigint | string | number | undefined ?? (value[1] as bigint | undefined) ?? 0n),
+    resolvedRecipient: (value.resolvedRecipient ?? value[2] ?? zeroAddress) as `0x${string}`,
+    slashed: Boolean(value.slashed ?? value[3] ?? false)
   };
 }
 
@@ -955,7 +996,7 @@ function formatBondDetail(invoice: InvoiceRecord) {
   }
   if (invoice.resolvedBondAmount > 0n) {
     return `${trimDecimal(formatEther(invoice.resolvedBondAmount))} ${suffix} ${
-      invoice.serviceBondSlashed ? "was paid to payer after missed SLA" : "was returned to provider"
+      invoice.serviceBondSlashed ? "was paid to payer after missed SLA without timely evidence" : "was returned to provider"
     }.`;
   }
   return "Recipient can post an optional bond before final settlement.";

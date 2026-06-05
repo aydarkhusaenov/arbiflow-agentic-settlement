@@ -4,13 +4,17 @@
 
 - No owner/admin withdrawal function.
 - Funds only move through explicit invoice state transitions.
-- ETH and ERC20 transfers are protected by `nonReentrant`.
-- State changes happen before outbound transfers.
+- All state-mutating entry points are protected by `nonReentrant`.
+- Final state, bond resolution, receipt hash, and events are prepared before outbound transfers.
 - ERC20 transfers use OpenZeppelin `SafeERC20`.
+- ERC20 payments and service bonds use exact balance-delta checks, so fee-on-transfer tokens are rejected instead of underfunding escrow.
 - Invalid calls use custom errors.
 - Partial settlements require a proposal from one counterparty and acceptance by the other.
+- Agent mandates are immutable after first attachment and must be attached before payment.
+- SLA deadlines must be future timestamps when attached; `0` means no SLA.
 - Agent mandates are stored as hashes/references, not raw sensitive prompts or private user instructions.
 - Finalized receipt hashes are deterministic summaries and do not custody or redirect funds.
+- Delivery evidence stores both a reference hash and the timestamp when it was attached.
 - Service bonds are optional and resolved only through existing terminal states.
 
 ## Authorization
@@ -24,9 +28,10 @@
 - Recipient can attach delivery evidence while an invoice is paid or refund-requested.
 - Payer or recipient can propose a partial split settlement while an invoice is paid or refund-requested.
 - Only the non-proposing counterparty can accept a settlement proposal.
-- Creator, recipient, or payer can attach an agent mandate before final invoice closure.
+- Creator or recipient can attach an agent mandate before payment; the payer accepts those rules by funding the invoice.
 - Recipient can post a service bond before final invoice closure.
-- Service bond is slashed only if refund occurs after SLA, no delivery evidence exists, and a payer is present.
+- Recipient timeout release is blocked by an SLA unless delivery evidence was attached by the SLA deadline.
+- Service bond is slashed only if refund occurs after SLA, no timely delivery evidence exists, and a payer is present.
 
 ## Test Coverage
 
@@ -55,11 +60,25 @@ Tests cover:
 - invalid settlement state, caller, and amount
 - negotiated ERC20 split settlement
 - agent mandate attachment and authorization
+- mandate overwrite rejection
+- stale SLA deadline rejection
+- post-payment mandate rejection
 - portable settlement receipt event
 - ETH service bond return on release
 - ETH service bond slash on missed SLA
-- delivery evidence preventing service bond slash
+- timely delivery evidence preventing service bond slash
+- late delivery evidence still allowing service bond slash
+- SLA-gated recipient timeout release
 - ERC20 service bond return on split settlement
+- fee-on-transfer ERC20 invoice rejection
+- fee-on-transfer ERC20 service bond rejection
+
+## Automated Checks
+
+- `pnpm test`: contract tests plus production frontend build.
+- `pnpm audit --prod`: no known production vulnerabilities.
+- `pnpm audit --audit-level high`: no known high-severity vulnerabilities.
+- `slither contracts --filter-paths "contracts/contracts/Mock|contracts/test|node_modules"`: no reentrancy findings after payout refactor. Remaining findings are expected use of `block.timestamp` for due dates/timeouts/SLA checks and low-level ETH `.call` with checked return value.
 
 ## Residual Risks
 
@@ -69,3 +88,4 @@ Tests cover:
 - Agent mandate hashes are integrity anchors. External systems still need to store or verify the corresponding signed payload.
 - Service bond slashing uses objective time/evidence conditions, not subjective quality evaluation.
 - No centralized arbitration layer is included by design; compromise settlement is counterparty-approved.
+- Full dev-tooling audit still reports one low-severity `elliptic` advisory through Hardhat 2 / ethers v5 internals. The advisory currently has no patched version; it is not part of the production frontend dependency graph.

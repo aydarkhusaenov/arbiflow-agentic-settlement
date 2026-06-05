@@ -34,8 +34,8 @@ Paid or RefundRequested
   v
 Settled
 
-Created, Paid, or RefundRequested
-  | attachAgentMandate by creator, recipient, or payer
+Created
+  | attachAgentMandate by creator or recipient
   v
 AgentContext attached
 
@@ -62,16 +62,13 @@ Cancelled
 - `timeout`: waiting period for recipient timeout release or payer timeout refund.
 - `refundRequestedAt`: timestamp when refund flow opened.
 - `settlementProposedAt`: timestamp when a compromise split was proposed.
+- `deliveryMarkedAt`: timestamp when delivery evidence was attached.
 - `state`: explicit invoice state.
 - `metadataHash`: off-chain invoice metadata reference.
 - `deliveryHash`: off-chain delivery/evidence reference.
 - `settlementMemoHash`: off-chain settlement reasoning reference.
 - `settlementProposedBy`: payer or recipient that proposed the split.
 - `settlementRecipientAmount`: amount paid to recipient if counterparty accepts settlement.
-- `serviceBondAmount`: active provider bond locked in the invoice token.
-- `resolvedBondAmount`: bond amount resolved at final settlement.
-- `resolvedBondRecipient`: account that received the resolved bond.
-- `serviceBondSlashed`: whether the bond was paid to payer after a missed SLA.
 
 ## Agent Context
 
@@ -86,6 +83,17 @@ Each invoice can carry a lightweight agent accountability layer:
 
 This keeps the contract independent from any one registry while creating a deterministic bridge to agent identity, reputation, and signed mandate systems.
 
+Mandates are immutable after first attachment and must be attached before payment. A non-zero SLA deadline must be in the future, which prevents a payer from adding stale rules after funds or provider bond are already at risk.
+
+## Bond Context
+
+Bond accounting is exposed through `getBondContext(invoiceId)`:
+
+- `activeAmount`: active provider bond locked in the invoice token.
+- `resolvedAmount`: bond amount resolved at final settlement.
+- `resolvedRecipient`: account that received the resolved bond.
+- `slashed`: whether the bond was paid to payer after a missed SLA.
+
 ## Service Bond
 
 The recipient can post an optional service bond in the invoice token. The bond is separate from the payer escrow and creates provider-side accountability:
@@ -93,8 +101,8 @@ The recipient can post an optional service bond in the invoice token. The bond i
 - successful release: bond returns to recipient
 - accepted split settlement: bond returns to recipient
 - unpaid cancellation: bond returns to recipient
-- refund after missed SLA with no delivery evidence: bond is slashed to payer
-- refund before SLA or with delivery evidence: bond returns to recipient
+- refund after missed SLA with no timely delivery evidence: bond is slashed to payer
+- refund before SLA or with timely delivery evidence: bond returns to recipient
 
 This creates a dual-deposit-like pattern without requiring a centralized arbitrator. The contract still does not judge delivery quality; it enforces an objective SLA/evidence condition.
 
@@ -131,6 +139,7 @@ ArbiFlow deliberately avoids an admin arbitrator. If delivery is disputed, payer
 - chain and contract address
 - invoice parties, token, amount, and final state
 - metadata, delivery evidence, and settlement memo
+- delivery evidence timestamp
 - split-settlement payout
 - resolved service bond amount, recipient, and slashing status
 - agent hashes, mandate hash, policy hash, and SLA deadline

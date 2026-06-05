@@ -19,6 +19,7 @@ async function increaseTime(seconds) {
 describe("InvoiceEscrow", function () {
   let escrow;
   let token;
+  let feeToken;
   let creator;
   let recipient;
   let payer;
@@ -32,6 +33,9 @@ describe("InvoiceEscrow", function () {
 
     const MockERC20 = await ethers.getContractFactory("MockERC20");
     token = await MockERC20.deploy();
+
+    const MockFeeERC20 = await ethers.getContractFactory("MockFeeERC20");
+    feeToken = await MockFeeERC20.deploy();
   });
 
   async function createEthInvoice(overrides = {}) {
@@ -130,6 +134,40 @@ describe("InvoiceEscrow", function () {
     expect(receiptHash).to.not.equal(ZERO_HASH);
   });
 
+  it("prevents agent mandate overwrite after first attachment", async function () {
+    const { id } = await createEthInvoice();
+
+    await escrow
+      .connect(creator)
+      .attachAgentMandate(id, ZERO_HASH, ZERO_HASH, ethers.id("original mandate"), ZERO_HASH, 0);
+
+    await expect(
+      escrow
+      .connect(recipient)
+      .attachAgentMandate(id, ZERO_HASH, ZERO_HASH, ethers.id("replacement mandate"), ZERO_HASH, 0)
+    ).to.be.revertedWithCustomError(escrow, "MandateAlreadyAttached");
+  });
+
+  it("requires SLA mandates to be attached before payment with a future deadline", async function () {
+    const { id, params } = await createEthInvoice();
+    const now = await latestTimestamp();
+
+    await expect(
+      escrow
+        .connect(creator)
+        .attachAgentMandate(id, ZERO_HASH, ZERO_HASH, ethers.id("stale mandate"), ZERO_HASH, now)
+    ).to.be.revertedWithCustomError(escrow, "InvalidSlaDeadline");
+
+    await escrow.connect(recipient).postServiceBond(id, ethers.parseEther("0.1"), { value: ethers.parseEther("0.1") });
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+
+    await expect(
+      escrow
+        .connect(payer)
+        .attachAgentMandate(id, ZERO_HASH, ZERO_HASH, ethers.id("post-payment mandate"), ZERO_HASH, now + DAY)
+    ).to.be.revertedWithCustomError(escrow, "InvalidState");
+  });
+
   it("returns posted service bond to recipient on successful release", async function () {
     const { id, params } = await createEthInvoice();
     const bond = ethers.parseEther("0.25");
@@ -146,14 +184,14 @@ describe("InvoiceEscrow", function () {
       [-(params.amount + bond), params.amount + bond]
     );
 
-    const invoice = await escrow.getInvoice(id);
-    expect(invoice.serviceBondAmount).to.equal(0);
-    expect(invoice.resolvedBondAmount).to.equal(bond);
-    expect(invoice.resolvedBondRecipient).to.equal(recipient.address);
-    expect(invoice.serviceBondSlashed).to.equal(false);
+    const bondContext = await escrow.getBondContext(id);
+    expect(bondContext.activeAmount).to.equal(0);
+    expect(bondContext.resolvedAmount).to.equal(bond);
+    expect(bondContext.resolvedRecipient).to.equal(recipient.address);
+    expect(bondContext.slashed).to.equal(false);
   });
 
-  it("slashes service bond to payer when SLA is missed without delivery evidence", async function () {
+  it("slashes service bond to payer when SLA is missed without timely delivery evidence", async function () {
     const { id, params } = await createEthInvoice({ timeout: HOUR });
     const now = await latestTimestamp();
     const bond = ethers.parseEther("0.2");
@@ -173,11 +211,11 @@ describe("InvoiceEscrow", function () {
       [-(params.amount + bond), params.amount + bond]
     );
 
-    const invoice = await escrow.getInvoice(id);
-    expect(invoice.serviceBondAmount).to.equal(0);
-    expect(invoice.resolvedBondAmount).to.equal(bond);
-    expect(invoice.resolvedBondRecipient).to.equal(payer.address);
-    expect(invoice.serviceBondSlashed).to.equal(true);
+    const bondContext = await escrow.getBondContext(id);
+    expect(bondContext.activeAmount).to.equal(0);
+    expect(bondContext.resolvedAmount).to.equal(bond);
+    expect(bondContext.resolvedRecipient).to.equal(payer.address);
+    expect(bondContext.slashed).to.equal(true);
   });
 
   it("does not slash service bond when delivery evidence exists", async function () {
@@ -201,9 +239,34 @@ describe("InvoiceEscrow", function () {
       [-(params.amount + bond), params.amount, bond]
     );
 
+    const bondContext = await escrow.getBondContext(id);
+    expect(bondContext.resolvedRecipient).to.equal(recipient.address);
+    expect(bondContext.slashed).to.equal(false);
+  });
+
+  it("slashes service bond when delivery evidence is posted after SLA", async function () {
+    const { id, params } = await createEthInvoice({ timeout: HOUR });
+    const now = await latestTimestamp();
+    const bond = ethers.parseEther("0.2");
+
+    await escrow
+      .connect(creator)
+      .attachAgentMandate(id, ZERO_HASH, ZERO_HASH, ethers.id("late evidence mandate"), ZERO_HASH, now + HOUR);
+    await escrow.connect(recipient).postServiceBond(id, bond, { value: bond });
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+
+    await increaseTime(HOUR + 1);
+    await escrow.connect(recipient).markDelivered(id, "ipfs://late-delivery-proof");
+    await escrow.connect(payer).requestRefund(id);
+    await increaseTime(HOUR + 1);
+
+    await escrow.connect(payer).refund(id);
+
     const invoice = await escrow.getInvoice(id);
-    expect(invoice.resolvedBondRecipient).to.equal(recipient.address);
-    expect(invoice.serviceBondSlashed).to.equal(false);
+    const bondContext = await escrow.getBondContext(id);
+    expect(invoice.deliveryMarkedAt).to.be.gt(invoice.paidAt);
+    expect(bondContext.resolvedRecipient).to.equal(payer.address);
+    expect(bondContext.slashed).to.equal(true);
   });
 
   it("validates mandate authorization and required mandate hash", async function () {
@@ -301,6 +364,36 @@ describe("InvoiceEscrow", function () {
   it("allows recipient timeout release when payer is inactive", async function () {
     const { id, params } = await createEthInvoice({ timeout: HOUR });
     await escrow.connect(payer).payInvoice(id, { value: params.amount });
+
+    await increaseTime(HOUR + 1);
+    await escrow.connect(recipient).release(id);
+
+    const invoice = await escrow.getInvoice(id);
+    expect(invoice.state).to.equal(3);
+  });
+
+  it("blocks recipient timeout release when SLA requires timely delivery evidence", async function () {
+    const { id, params } = await createEthInvoice({ timeout: HOUR });
+    const now = await latestTimestamp();
+
+    await escrow
+      .connect(creator)
+      .attachAgentMandate(id, ZERO_HASH, ZERO_HASH, ethers.id("timely release mandate"), ZERO_HASH, now + HOUR);
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+
+    await increaseTime(HOUR + 1);
+    await expect(escrow.connect(recipient).release(id)).to.be.revertedWithCustomError(escrow, "Unauthorized");
+  });
+
+  it("allows recipient timeout release when delivery evidence was posted before SLA", async function () {
+    const { id, params } = await createEthInvoice({ timeout: HOUR });
+    const now = await latestTimestamp();
+
+    await escrow
+      .connect(creator)
+      .attachAgentMandate(id, ZERO_HASH, ZERO_HASH, ethers.id("timely evidence mandate"), ZERO_HASH, now + HOUR);
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+    await escrow.connect(recipient).markDelivered(id, "ipfs://timely-delivery-proof");
 
     await increaseTime(HOUR + 1);
     await escrow.connect(recipient).release(id);
@@ -514,6 +607,40 @@ describe("InvoiceEscrow", function () {
     const id = receipt.logs.find((log) => log.fragment && log.fragment.name === "InvoiceCreated").args.invoiceId;
 
     await expect(escrow.connect(payer).payInvoice(id, { value: 1 })).to.be.revertedWithCustomError(
+      escrow,
+      "IncorrectPayment"
+    );
+  });
+
+  it("rejects fee-on-transfer ERC20 invoice payment that receives less than requested", async function () {
+    const amount = ethers.parseUnits("100", 18);
+    await feeToken.mint(payer.address, amount);
+
+    const now = await latestTimestamp();
+    const tx = await escrow
+      .connect(creator)
+      .createInvoice(recipient.address, await feeToken.getAddress(), amount, "ipfs://fee-token", now + DAY, DAY);
+    const receipt = await tx.wait();
+    const id = receipt.logs.find((log) => log.fragment && log.fragment.name === "InvoiceCreated").args.invoiceId;
+
+    await feeToken.connect(payer).approve(await escrow.getAddress(), amount);
+    await expect(escrow.connect(payer).payInvoice(id)).to.be.revertedWithCustomError(escrow, "IncorrectPayment");
+  });
+
+  it("rejects fee-on-transfer ERC20 service bond that receives less than requested", async function () {
+    const amount = ethers.parseUnits("100", 18);
+    const bond = ethers.parseUnits("10", 18);
+    await feeToken.mint(recipient.address, bond);
+
+    const now = await latestTimestamp();
+    const tx = await escrow
+      .connect(creator)
+      .createInvoice(recipient.address, await feeToken.getAddress(), amount, "ipfs://fee-bond", now + DAY, DAY);
+    const receipt = await tx.wait();
+    const id = receipt.logs.find((log) => log.fragment && log.fragment.name === "InvoiceCreated").args.invoiceId;
+
+    await feeToken.connect(recipient).approve(await escrow.getAddress(), bond);
+    await expect(escrow.connect(recipient).postServiceBond(id, bond)).to.be.revertedWithCustomError(
       escrow,
       "IncorrectPayment"
     );

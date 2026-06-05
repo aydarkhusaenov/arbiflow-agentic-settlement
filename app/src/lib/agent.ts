@@ -14,6 +14,7 @@ export type InvoiceRecord = {
   timeout: bigint;
   refundRequestedAt: bigint;
   settlementProposedAt: bigint;
+  deliveryMarkedAt: bigint;
   state: number;
   metadataHash: string;
   deliveryHash: string;
@@ -67,12 +68,23 @@ export function assessInvoice(
   const refundAvailableAt = Number(invoice.refundRequestedAt + invoice.timeout);
   const tokenLabel = invoice.token === zeroAddress ? "ETH" : "ERC20";
   const mandateAttached = Boolean(agentContext && agentContext.mandateHash !== zeroHash);
-  const slaPassed = Boolean(agentContext?.slaDeadline && agentContext.slaDeadline > 0n && BigInt(nowSeconds) > agentContext.slaDeadline);
+  const slaDeadline = agentContext?.slaDeadline ?? 0n;
+  const slaRequiresTimelyDelivery = slaDeadline > 0n;
+  const slaPassed = Boolean(slaRequiresTimelyDelivery && BigInt(nowSeconds) > slaDeadline);
+  const hasDeliveryEvidence = Boolean(invoice.deliveryHash && invoice.deliveryMarkedAt > 0n);
+  const hasTimelyDelivery = Boolean(
+    hasDeliveryEvidence && (!slaRequiresTimelyDelivery || invoice.deliveryMarkedAt <= slaDeadline)
+  );
+  const deliveryEvidenceNote = hasDeliveryEvidence
+    ? `Delivery evidence: ${invoice.deliveryHash} at ${formatUnix(Number(invoice.deliveryMarkedAt))}${
+        slaRequiresTimelyDelivery && !hasTimelyDelivery ? " (after SLA)" : ""
+      }.`
+    : "No delivery evidence has been attached.";
   const accountabilityNotes = [
     mandateAttached ? `Agent mandate attached: ${shortHash(agentContext?.mandateHash)}.` : "No agent mandate is attached yet.",
     receiptHash ? `Portable receipt hash: ${shortHash(receiptHash)}.` : "Receipt hash will be available from the contract.",
-    agentContext?.slaDeadline && agentContext.slaDeadline > 0n
-      ? `SLA deadline: ${formatUnix(Number(agentContext.slaDeadline))}${slaPassed ? " (passed)" : ""}.`
+    slaRequiresTimelyDelivery
+      ? `SLA deadline: ${formatUnix(Number(slaDeadline))}${slaPassed ? " (passed)" : ""}.`
       : "No SLA deadline is encoded."
   ];
   const settlementOpen = invoice.settlementProposedBy !== zeroAddress;
@@ -85,7 +97,7 @@ export function assessInvoice(
     : "No split settlement proposal is open.";
   const bondNotes = [
     invoice.serviceBondAmount > 0n
-      ? `Service bond active: ${formatAmount(invoice.serviceBondAmount)} at risk if SLA is missed without evidence.`
+      ? `Service bond active: ${formatAmount(invoice.serviceBondAmount)} at risk if SLA is missed without timely evidence.`
       : invoice.resolvedBondAmount > 0n
         ? `Service bond resolved: ${formatAmount(invoice.resolvedBondAmount)} ${
             invoice.serviceBondSlashed ? "slashed to payer" : "returned to provider"
@@ -116,7 +128,10 @@ export function assessInvoice(
   }
 
   if (invoice.state === 1) {
-    const recipientCanRelease = isRecipient && nowSeconds >= paidReleaseAt;
+    const recipientTimeoutReached = isRecipient && nowSeconds >= paidReleaseAt;
+    const recipientCanRelease = Boolean(
+      recipientTimeoutReached && (!slaRequiresTimelyDelivery || hasTimelyDelivery)
+    );
     return {
       headline: settlementOpen ? "Funds are escrowed and a settlement proposal is open." : "Funds are locked in escrow.",
       risk: settlementOpen ? "medium" : "low",
@@ -141,7 +156,9 @@ export function assessInvoice(
             ? "Payer can release to recipient now."
             : recipientCanRelease
               ? "Recipient timeout release is available."
-              : "Only payer can release before timeout."
+              : recipientTimeoutReached && slaRequiresTimelyDelivery
+                ? "SLA mandate requires timely delivery evidence before recipient timeout release."
+                : "Only payer can release before timeout."
         },
         {
           id: "requestRefund",
@@ -153,7 +170,7 @@ export function assessInvoice(
       notes: [
         `Recipient timeout release: ${formatUnix(paidReleaseAt)}.`,
         settlementNote,
-        invoice.deliveryHash ? `Delivery evidence: ${invoice.deliveryHash}.` : "No delivery evidence has been attached.",
+        deliveryEvidenceNote,
         ...accountabilityNotes,
         ...bondNotes
       ]
@@ -192,7 +209,7 @@ export function assessInvoice(
       notes: [
         `Payer timeout refund: ${formatUnix(refundAvailableAt)}.`,
         settlementNote,
-        invoice.deliveryHash ? `Delivery evidence: ${invoice.deliveryHash}.` : "Delivery evidence is still missing.",
+        hasDeliveryEvidence ? deliveryEvidenceNote : "Delivery evidence is still missing.",
         ...accountabilityNotes,
         ...bondNotes
       ]
