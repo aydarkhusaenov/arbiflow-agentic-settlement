@@ -30,6 +30,7 @@ Refunded
 
 Paid or RefundRequested
   | proposeSettlement by payer or recipient
+  | cancelSettlementProposal by proposer
   | acceptSettlement by counterparty
   v
 Settled
@@ -64,9 +65,15 @@ Cancelled
 - `refundRequestedAt`: timestamp when refund flow opened.
 - `settlementProposedAt`: timestamp when a compromise split was proposed.
 - `deliveryMarkedAt`: timestamp when delivery evidence was attached.
+- `deliveryEvidenceCount`: number of delivery evidence entries appended.
+- `disputeMarkedAt`: timestamp when payer first attached dispute evidence.
+- `disputeEvidenceCount`: number of dispute evidence entries appended.
+- `deliveryEvidenceRoot`: rolling hash root over all delivery evidence entries.
+- `disputeEvidenceRoot`: rolling hash root over all dispute evidence entries.
 - `state`: explicit invoice state.
 - `metadataHash`: off-chain invoice metadata reference.
-- `deliveryHash`: off-chain delivery/evidence reference.
+- `deliveryHash`: first off-chain delivery/evidence reference.
+- `disputeHash`: first off-chain dispute/evidence reference.
 - `settlementMemoHash`: off-chain settlement reasoning reference.
 - `settlementProposedBy`: payer or recipient that proposed the split.
 - `settlementRecipientAmount`: amount paid to recipient if counterparty accepts settlement.
@@ -137,6 +144,18 @@ The recipient can post an optional service bond in the invoice token. The bond i
 
 This creates a dual-deposit-like pattern without requiring a centralized arbitrator. The contract still does not judge delivery quality; it enforces an objective SLA/evidence condition.
 
+## Evidence Ledger
+
+ArbiFlow keeps first evidence references for quick UI scanning and rolling roots for auditability:
+
+- recipient delivery entries update `deliveryEvidenceRoot`
+- payer dispute entries update `disputeEvidenceRoot`
+- first delivery timestamp remains fixed for SLA logic
+- later evidence appends do not erase earlier evidence
+- final receipts include both evidence roots and counts
+
+This gives both sides an append-only trail without putting large files on-chain. IPFS, HTTPS, Arweave, or private evidence vault references can all be represented as hashes/URIs.
+
 ## Agent Layer
 
 The agent is deterministic by default. It reads:
@@ -163,6 +182,8 @@ The agent does not sign transactions, custody funds, or decide authorization. Al
 
 ArbiFlow deliberately avoids an admin arbitrator. If delivery is disputed, payer or recipient can propose a split settlement. The proposal stores the recipient payout, payer refund, proposer, timestamp, and memo hash. Only the counterparty can accept the proposal. This gives the product a practical dispute-resolution path while preserving user custody and contract-enforced consent.
 
+The proposer can cancel their own open split proposal. This prevents stale compromise offers from remaining accept-able after off-chain negotiation changes.
+
 ## Portable Receipt
 
 `settlementReceiptHash(invoiceId)` returns a deterministic hash over:
@@ -171,6 +192,7 @@ ArbiFlow deliberately avoids an admin arbitrator. If delivery is disputed, payer
 - invoice parties, token, amount, and final state
 - metadata, delivery evidence, and settlement memo
 - delivery evidence timestamp
+- delivery and dispute evidence counts and rolling roots
 - split-settlement payout
 - resolved service bond amount, recipient, and slashing status
 - agent hashes, mandate hash, policy hash, and SLA deadline

@@ -34,6 +34,7 @@ pnpm build
 
 - Trust-minimized escrow for real commercial invoices.
 - On-chain delivery evidence for off-chain work handoff.
+- Append-only delivery and dispute evidence roots for two-sided audit trails.
 - Counterparty-approved partial settlements for disputes without a centralized arbitrator.
 - Hashed agent mandates, policy hashes, SLA deadline, and portable settlement receipt hashes.
 - EIP-712 signed payer mandates that bind authorization to the exact invoice payment requirement.
@@ -42,7 +43,7 @@ pnpm build
 - Timeout paths for inactive counterparties.
 - ETH and ERC20 support.
 - Agent panel that reads live contract state, wallet role, timing windows, evidence, and settlement proposals.
-- Contract tests for success, failure, authorization, signed mandates, timeout, service bond, fee-on-transfer rejection, and split-settlement paths.
+- Contract tests for success, failure, authorization, signed mandates, evidence roots, dispute evidence, timeout, service bond, fee-on-transfer rejection, and split-settlement paths.
 
 ## Local Contract Workflow
 

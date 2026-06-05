@@ -15,6 +15,8 @@ These notes explain the product direction used for the stronger buildathon submi
 Fast agent payments are useful, but real commerce also needs:
 
 - delivery evidence
+- payer dispute evidence
+- append-only evidence roots
 - escrowed funds for non-instant service work
 - dispute and compromise outcomes
 - final settlement receipts
@@ -27,6 +29,8 @@ ArbiFlow is the settlement layer around agentic payment:
 
 - escrow first, direct release when clean
 - delivery evidence when work is delivered
+- payer dispute evidence when work is challenged
+- rolling evidence roots so later evidence cannot erase earlier submissions
 - refund windows when the payer disputes
 - partial split settlement when both sides compromise
 - mandate/policy/SLA hashes for agent accountability
@@ -42,6 +46,7 @@ ArbiFlow is the settlement layer around agentic payment:
 - Slither was used as a static-analysis pass. Its reentrancy findings were addressed by settling state, bond context, receipt hashes, and events before outbound transfers.
 - Dependency audit results drove the frontend upgrade to patched Next.js and targeted pnpm overrides for vulnerable transitive packages.
 - EIP-712 and ERC-1271 research drove signed mandates that bind payer approval to the exact invoice requirement and support contract-wallet signers.
+- Real dispute workflows pushed the design from mutable single evidence strings to append-only delivery and dispute roots included in final receipts.
 
 ## Sources
 

@@ -15,9 +15,15 @@ export type InvoiceRecord = {
   refundRequestedAt: bigint;
   settlementProposedAt: bigint;
   deliveryMarkedAt: bigint;
+  deliveryEvidenceCount: bigint;
+  disputeMarkedAt: bigint;
+  disputeEvidenceCount: bigint;
+  deliveryEvidenceRoot: `0x${string}`;
+  disputeEvidenceRoot: `0x${string}`;
   state: number;
   metadataHash: string;
   deliveryHash: string;
+  disputeHash: string;
   settlementMemoHash: string;
   settlementProposedBy: `0x${string}`;
   settlementRecipientAmount: bigint;
@@ -84,8 +90,11 @@ export function assessInvoice(
   const deliveryEvidenceNote = hasDeliveryEvidence
     ? `Delivery evidence: ${invoice.deliveryHash} at ${formatUnix(Number(invoice.deliveryMarkedAt))}${
         slaRequiresTimelyDelivery && !hasTimelyDelivery ? " (after SLA)" : ""
-      }.`
+      }. Evidence chain: ${invoice.deliveryEvidenceCount.toString()} item${invoice.deliveryEvidenceCount === 1n ? "" : "s"}.`
     : "No delivery evidence has been attached.";
+  const disputeEvidenceNote = invoice.disputeEvidenceCount > 0n
+    ? `Dispute evidence: ${invoice.disputeHash || shortHash(invoice.disputeEvidenceRoot)} at ${formatUnix(Number(invoice.disputeMarkedAt))}. Evidence chain: ${invoice.disputeEvidenceCount.toString()} item${invoice.disputeEvidenceCount === 1n ? "" : "s"}.`
+    : "No dispute evidence has been attached.";
   const accountabilityNotes = [
     mandateAttached ? `Agent mandate attached: ${shortHash(agentContext?.mandateHash)}.` : "No agent mandate is attached yet.",
     hasAuthorizedPayer ? `Authorized payer: ${shortHash(authorizedPayer)}${mandateExpired ? " (expired)" : ""}.` : "No payer signature is locked.",
@@ -184,6 +193,7 @@ export function assessInvoice(
         `Recipient timeout release: ${formatUnix(paidReleaseAt)}.`,
         settlementNote,
         deliveryEvidenceNote,
+        disputeEvidenceNote,
         ...accountabilityNotes,
         ...bondNotes
       ]
@@ -223,6 +233,7 @@ export function assessInvoice(
         `Payer timeout refund: ${formatUnix(refundAvailableAt)}.`,
         settlementNote,
         hasDeliveryEvidence ? deliveryEvidenceNote : "Delivery evidence is still missing.",
+        disputeEvidenceNote,
         ...accountabilityNotes,
         ...bondNotes
       ]

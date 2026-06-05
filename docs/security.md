@@ -19,6 +19,9 @@
 - Payment requirement hashes bind invoice amount, token, recipient, due date, timeout, metadata, chain, and escrow contract.
 - Finalized receipt hashes are deterministic summaries and do not custody or redirect funds.
 - Delivery evidence stores both a reference hash and the timestamp when it was attached.
+- Delivery evidence and payer dispute evidence append into separate rolling roots.
+- First delivery timestamp is preserved for SLA checks; later delivery entries cannot erase timely evidence.
+- Settlement proposers can cancel their own open proposals before counterparty acceptance.
 - Service bonds are optional and resolved only through existing terminal states.
 
 ## Authorization
@@ -30,7 +33,9 @@
 - Recipient can approve refund immediately after request.
 - Payer can claim refund only after refund timeout.
 - Recipient can attach delivery evidence while an invoice is paid or refund-requested.
+- Payer can attach dispute evidence while an invoice is paid or refund-requested.
 - Payer or recipient can propose a partial split settlement while an invoice is paid or refund-requested.
+- Settlement proposer can cancel their own open split proposal.
 - Only the non-proposing counterparty can accept a settlement proposal.
 - Creator or recipient can attach an agent mandate before payment; the payer accepts those rules by funding the invoice.
 - Anyone can submit a signed mandate only if the authorized payer signed the exact EIP-712 mandate for that invoice requirement.
@@ -79,7 +84,11 @@ Tests cover:
 - ETH service bond slash on missed SLA
 - timely delivery evidence preventing service bond slash
 - late delivery evidence still allowing service bond slash
+- append-only delivery evidence root
+- payer dispute evidence root
+- empty evidence rejection
 - SLA-gated recipient timeout release
+- settlement proposal cancellation
 - ERC20 service bond return on split settlement
 - fee-on-transfer ERC20 invoice rejection
 - fee-on-transfer ERC20 service bond rejection
@@ -96,6 +105,7 @@ Tests cover:
 - ERC20 frontend flow assumes prior token approval for custom ERC20 invoices.
 - Metadata is stored as a string reference and is not validated on-chain.
 - Settlement memos and delivery evidence are off-chain references; the contract enforces consent and payouts, not truthfulness of external files.
+- Evidence roots prove the sequence of submitted references, not the factual truth of the underlying off-chain evidence.
 - Agent mandate hashes are integrity anchors. External systems still need to store or verify the corresponding signed payload.
 - The EIP-712 signed mandate binds a payer to the invoice requirement hash, but it does not prove off-chain metadata truthfulness.
 - The in-contract EOA verifier supports standard 65-byte secp256k1 signatures. Contract wallets can use ERC-1271 validation.

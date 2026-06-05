@@ -42,9 +42,15 @@ contract InvoiceEscrow is ReentrancyGuard {
         uint64 refundRequestedAt;
         uint64 settlementProposedAt;
         uint64 deliveryMarkedAt;
+        uint64 deliveryEvidenceCount;
+        uint64 disputeMarkedAt;
+        uint64 disputeEvidenceCount;
+        bytes32 deliveryEvidenceRoot;
+        bytes32 disputeEvidenceRoot;
         State state;
         string metadataHash;
         string deliveryHash;
+        string disputeHash;
         string settlementMemoHash;
         address settlementProposedBy;
         uint256 settlementRecipientAmount;
@@ -122,6 +128,22 @@ contract InvoiceEscrow is ReentrancyGuard {
         uint256 payerAmount
     );
     event SettlementReceiptFinalized(uint256 indexed invoiceId, bytes32 indexed receiptHash, State finalState);
+    event DeliveryEvidenceAppended(
+        uint256 indexed invoiceId,
+        address indexed recipient,
+        uint64 evidenceCount,
+        bytes32 evidenceRoot,
+        string deliveryHash
+    );
+    event DisputeMarked(uint256 indexed invoiceId, address indexed payer, string disputeHash);
+    event DisputeEvidenceAppended(
+        uint256 indexed invoiceId,
+        address indexed payer,
+        uint64 evidenceCount,
+        bytes32 evidenceRoot,
+        string disputeHash
+    );
+    event SettlementProposalCancelled(uint256 indexed invoiceId, address indexed cancelledBy);
 
     error InvalidRecipient();
     error InvalidAmount();
@@ -141,6 +163,7 @@ contract InvoiceEscrow is ReentrancyGuard {
     error InvalidPayer();
     error InvalidSignature();
     error MandateExpired();
+    error InvalidEvidence();
 
     function createInvoice(
         address recipient,
@@ -167,9 +190,15 @@ contract InvoiceEscrow is ReentrancyGuard {
             refundRequestedAt: 0,
             settlementProposedAt: 0,
             deliveryMarkedAt: 0,
+            deliveryEvidenceCount: 0,
+            disputeMarkedAt: 0,
+            disputeEvidenceCount: 0,
+            deliveryEvidenceRoot: bytes32(0),
+            disputeEvidenceRoot: bytes32(0),
             state: State.Created,
             metadataHash: metadataHash,
             deliveryHash: "",
+            disputeHash: "",
             settlementMemoHash: "",
             settlementProposedBy: address(0),
             settlementRecipientAmount: 0
@@ -340,11 +369,64 @@ contract InvoiceEscrow is ReentrancyGuard {
             revert InvalidState(State.Paid, invoice.state);
         }
         if (msg.sender != invoice.recipient) revert Unauthorized();
+        if (bytes(deliveryHash).length == 0) revert InvalidEvidence();
 
-        invoice.deliveryHash = deliveryHash;
-        invoice.deliveryMarkedAt = uint64(block.timestamp);
+        uint64 markedAt = uint64(block.timestamp);
+        if (invoice.deliveryMarkedAt == 0) {
+            invoice.deliveryHash = deliveryHash;
+            invoice.deliveryMarkedAt = markedAt;
+        }
+
+        uint64 evidenceCount = invoice.deliveryEvidenceCount + 1;
+        bytes32 evidenceRoot = keccak256(
+            abi.encode(
+                "ARBIFLOW_DELIVERY_EVIDENCE_V1",
+                invoice.deliveryEvidenceRoot,
+                invoiceId,
+                msg.sender,
+                evidenceCount,
+                markedAt,
+                keccak256(bytes(deliveryHash))
+            )
+        );
+        invoice.deliveryEvidenceCount = evidenceCount;
+        invoice.deliveryEvidenceRoot = evidenceRoot;
 
         emit DeliveryMarked(invoiceId, msg.sender, deliveryHash);
+        emit DeliveryEvidenceAppended(invoiceId, msg.sender, evidenceCount, evidenceRoot, deliveryHash);
+    }
+
+    function markDisputed(uint256 invoiceId, string calldata disputeHash) external nonReentrant {
+        Invoice storage invoice = _invoice(invoiceId);
+        if (invoice.state != State.Paid && invoice.state != State.RefundRequested) {
+            revert InvalidState(State.Paid, invoice.state);
+        }
+        if (msg.sender != invoice.payer) revert Unauthorized();
+        if (bytes(disputeHash).length == 0) revert InvalidEvidence();
+
+        uint64 markedAt = uint64(block.timestamp);
+        if (invoice.disputeMarkedAt == 0) {
+            invoice.disputeHash = disputeHash;
+            invoice.disputeMarkedAt = markedAt;
+            emit DisputeMarked(invoiceId, msg.sender, disputeHash);
+        }
+
+        uint64 evidenceCount = invoice.disputeEvidenceCount + 1;
+        bytes32 evidenceRoot = keccak256(
+            abi.encode(
+                "ARBIFLOW_DISPUTE_EVIDENCE_V1",
+                invoice.disputeEvidenceRoot,
+                invoiceId,
+                msg.sender,
+                evidenceCount,
+                markedAt,
+                keccak256(bytes(disputeHash))
+            )
+        );
+        invoice.disputeEvidenceCount = evidenceCount;
+        invoice.disputeEvidenceRoot = evidenceRoot;
+
+        emit DisputeEvidenceAppended(invoiceId, msg.sender, evidenceCount, evidenceRoot, disputeHash);
     }
 
     function proposeSettlement(
@@ -365,6 +447,22 @@ contract InvoiceEscrow is ReentrancyGuard {
         invoice.settlementMemoHash = memoHash;
 
         emit SettlementProposed(invoiceId, msg.sender, recipientAmount, invoice.amount - recipientAmount, memoHash);
+    }
+
+    function cancelSettlementProposal(uint256 invoiceId) external nonReentrant {
+        Invoice storage invoice = _invoice(invoiceId);
+        if (invoice.state != State.Paid && invoice.state != State.RefundRequested) {
+            revert InvalidState(State.Paid, invoice.state);
+        }
+        if (invoice.settlementProposedBy == address(0)) revert NoSettlementProposal();
+        if (msg.sender != invoice.settlementProposedBy) revert Unauthorized();
+
+        invoice.settlementProposedBy = address(0);
+        invoice.settlementRecipientAmount = 0;
+        invoice.settlementProposedAt = 0;
+        invoice.settlementMemoHash = "";
+
+        emit SettlementProposalCancelled(invoiceId, msg.sender);
     }
 
     function acceptSettlement(uint256 invoiceId) external nonReentrant {
@@ -511,6 +609,12 @@ contract InvoiceEscrow is ReentrancyGuard {
                 invoice.metadataHash,
                 invoice.deliveryHash,
                 invoice.deliveryMarkedAt,
+                invoice.deliveryEvidenceCount,
+                invoice.deliveryEvidenceRoot,
+                invoice.disputeHash,
+                invoice.disputeMarkedAt,
+                invoice.disputeEvidenceCount,
+                invoice.disputeEvidenceRoot,
                 invoice.settlementMemoHash,
                 invoice.settlementRecipientAmount,
                 bond.resolvedAmount,

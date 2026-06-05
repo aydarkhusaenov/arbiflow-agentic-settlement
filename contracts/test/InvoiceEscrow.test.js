@@ -111,6 +111,10 @@ describe("InvoiceEscrow", function () {
     expect(invoice.token).to.equal(params.token);
     expect(invoice.amount).to.equal(params.amount);
     expect(invoice.metadataHash).to.equal(params.metadataHash);
+    expect(invoice.deliveryEvidenceCount).to.equal(0);
+    expect(invoice.disputeEvidenceCount).to.equal(0);
+    expect(invoice.deliveryEvidenceRoot).to.equal(ZERO_HASH);
+    expect(invoice.disputeEvidenceRoot).to.equal(ZERO_HASH);
     expect(invoice.state).to.equal(0);
   });
 
@@ -602,6 +606,29 @@ describe("InvoiceEscrow", function () {
 
     const invoice = await escrow.getInvoice(id);
     expect(invoice.deliveryHash).to.equal("ipfs://delivery-proof");
+    expect(invoice.deliveryEvidenceCount).to.equal(1);
+    expect(invoice.deliveryEvidenceRoot).to.not.equal(ZERO_HASH);
+  });
+
+  it("appends delivery evidence without overwriting first SLA timestamp", async function () {
+    const { id, params } = await createEthInvoice({ timeout: HOUR });
+    const now = await latestTimestamp();
+
+    await escrow
+      .connect(creator)
+      .attachAgentMandate(id, ZERO_HASH, ZERO_HASH, ethers.id("append delivery mandate"), ZERO_HASH, now + HOUR);
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+    await escrow.connect(recipient).markDelivered(id, "ipfs://first-delivery-proof");
+
+    const first = await escrow.getInvoice(id);
+    await increaseTime(HOUR + 1);
+    await escrow.connect(recipient).markDelivered(id, "ipfs://supplemental-delivery-proof");
+
+    const second = await escrow.getInvoice(id);
+    expect(second.deliveryHash).to.equal("ipfs://first-delivery-proof");
+    expect(second.deliveryMarkedAt).to.equal(first.deliveryMarkedAt);
+    expect(second.deliveryEvidenceCount).to.equal(2);
+    expect(second.deliveryEvidenceRoot).to.not.equal(first.deliveryEvidenceRoot);
   });
 
   it("lets recipient attach delivery evidence after refund request", async function () {
@@ -613,6 +640,48 @@ describe("InvoiceEscrow", function () {
 
     const invoice = await escrow.getInvoice(id);
     expect(invoice.deliveryHash).to.equal("ipfs://late-delivery-proof");
+  });
+
+  it("lets payer attach dispute evidence while funds are escrowed or refund requested", async function () {
+    const { id, params } = await createEthInvoice();
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+
+    await expect(escrow.connect(other).markDisputed(id, "ipfs://bad-dispute")).to.be.revertedWithCustomError(
+      escrow,
+      "Unauthorized"
+    );
+
+    await expect(escrow.connect(payer).markDisputed(id, "ipfs://initial-dispute-proof"))
+      .to.emit(escrow, "DisputeMarked")
+      .withArgs(id, payer.address, "ipfs://initial-dispute-proof");
+
+    const first = await escrow.getInvoice(id);
+    expect(first.disputeHash).to.equal("ipfs://initial-dispute-proof");
+    expect(first.disputeEvidenceCount).to.equal(1);
+    expect(first.disputeEvidenceRoot).to.not.equal(ZERO_HASH);
+
+    await escrow.connect(payer).requestRefund(id);
+    await escrow.connect(payer).markDisputed(id, "ipfs://supplemental-dispute-proof");
+
+    const second = await escrow.getInvoice(id);
+    expect(second.disputeHash).to.equal("ipfs://initial-dispute-proof");
+    expect(second.disputeMarkedAt).to.equal(first.disputeMarkedAt);
+    expect(second.disputeEvidenceCount).to.equal(2);
+    expect(second.disputeEvidenceRoot).to.not.equal(first.disputeEvidenceRoot);
+  });
+
+  it("rejects empty delivery and dispute evidence", async function () {
+    const { id, params } = await createEthInvoice();
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+
+    await expect(escrow.connect(recipient).markDelivered(id, "")).to.be.revertedWithCustomError(
+      escrow,
+      "InvalidEvidence"
+    );
+    await expect(escrow.connect(payer).markDisputed(id, "")).to.be.revertedWithCustomError(
+      escrow,
+      "InvalidEvidence"
+    );
   });
 
   it("prevents timeout refund before waiting period", async function () {
@@ -673,6 +742,29 @@ describe("InvoiceEscrow", function () {
 
     const invoice = await escrow.getInvoice(id);
     expect(invoice.state).to.equal(6);
+  });
+
+  it("lets settlement proposer cancel a stale proposal", async function () {
+    const { id, params } = await createEthInvoice();
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+    await escrow.connect(payer).proposeSettlement(id, ethers.parseEther("0.8"), "ipfs://payer-proposal");
+
+    await expect(escrow.connect(recipient).cancelSettlementProposal(id)).to.be.revertedWithCustomError(
+      escrow,
+      "Unauthorized"
+    );
+    await expect(escrow.connect(payer).cancelSettlementProposal(id))
+      .to.emit(escrow, "SettlementProposalCancelled")
+      .withArgs(id, payer.address);
+
+    const invoice = await escrow.getInvoice(id);
+    expect(invoice.settlementProposedBy).to.equal(ZERO_ADDRESS);
+    expect(invoice.settlementRecipientAmount).to.equal(0);
+    expect(invoice.settlementMemoHash).to.equal("");
+    await expect(escrow.connect(recipient).acceptSettlement(id)).to.be.revertedWithCustomError(
+      escrow,
+      "NoSettlementProposal"
+    );
   });
 
   it("validates settlement proposal state, caller, and amount", async function () {

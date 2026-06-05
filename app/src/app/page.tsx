@@ -116,6 +116,7 @@ export default function Home() {
   const [txHash, setTxHash] = useState<`0x${string}` | null>(null);
   const [txError, setTxError] = useState("");
   const [deliveryHash, setDeliveryHash] = useState("ipfs://arbiflow-delivery-proof");
+  const [disputeHash, setDisputeHash] = useState("ipfs://arbiflow-dispute-proof");
   const [settlementAmount, setSettlementAmount] = useState("");
   const [settlementMemoHash, setSettlementMemoHash] = useState("ipfs://arbiflow-settlement-plan");
   const [serviceBondAmount, setServiceBondAmount] = useState("0.01");
@@ -260,6 +261,11 @@ export default function Home() {
   const canProposeSettlement = Boolean(selectedInvoiceWithBond && isSelectedActive && (isSelectedRecipient || isSelectedPayer));
   const settlementOpen = Boolean(selectedInvoiceWithBond && selectedInvoiceWithBond.settlementProposedBy !== zeroAddress);
   const mandateAttached = Boolean(selectedAgentContext && selectedAgentContext.mandateHash !== zeroHash);
+  const isSettlementProposer = Boolean(
+    selectedInvoiceWithBond &&
+      address &&
+      selectedInvoiceWithBond.settlementProposedBy.toLowerCase() === address.toLowerCase()
+  );
   const canAcceptSettlement = Boolean(
     selectedInvoiceWithBond &&
       settlementOpen &&
@@ -366,6 +372,15 @@ export default function Home() {
       return;
     }
     await runWrite("markDelivered", [invoice.id, evidence]);
+  }
+
+  async function submitDispute(invoice: InvoiceRecord) {
+    const evidence = disputeHash.trim();
+    if (!evidence) {
+      setTxError("Dispute evidence hash is required.");
+      return;
+    }
+    await runWrite("markDisputed", [invoice.id, evidence]);
   }
 
   async function submitSettlement(invoice: InvoiceRecord) {
@@ -737,7 +752,11 @@ export default function Home() {
                 </div>
                 <div>
                   <dt>Delivery</dt>
-                  <dd>{selectedInvoiceWithBond.deliveryHash ? "attached" : "missing"}</dd>
+                  <dd>{selectedInvoiceWithBond.deliveryEvidenceCount > 0n ? `${selectedInvoiceWithBond.deliveryEvidenceCount.toString()} item` : "missing"}</dd>
+                </div>
+                <div>
+                  <dt>Dispute</dt>
+                  <dd>{selectedInvoiceWithBond.disputeEvidenceCount > 0n ? `${selectedInvoiceWithBond.disputeEvidenceCount.toString()} item` : "none"}</dd>
                 </div>
                 <div>
                   <dt>Settlement</dt>
@@ -923,6 +942,26 @@ export default function Home() {
                   Mark delivered
                 </button>
 
+                <label>
+                  Dispute evidence
+                  <input
+                    value={disputeHash}
+                    onChange={(event) => setDisputeHash(event.target.value)}
+                    placeholder="ipfs://dispute-proof"
+                    spellCheck={false}
+                  />
+                </label>
+                <button
+                  className="button action"
+                  type="button"
+                  disabled={!isConnected || !isSelectedPayer || !isSelectedActive || Boolean(pendingAction)}
+                  title="Payer can attach dispute evidence while the invoice is paid or refund requested."
+                  onClick={() => submitDispute(selectedInvoiceWithBond)}
+                >
+                  {pendingAction === "markDisputed" ? <Loader2 className="spin" aria-hidden /> : <Undo2 aria-hidden />}
+                  Mark dispute
+                </button>
+
                 <div className="splitInputs">
                   <label>
                     Recipient payout
@@ -968,6 +1007,16 @@ export default function Home() {
                     >
                       {pendingAction === "acceptSettlement" ? <Loader2 className="spin" aria-hidden /> : <CheckCircle2 aria-hidden />}
                       Accept split
+                    </button>
+                    <button
+                      className="button action"
+                      type="button"
+                      disabled={!isConnected || !isSettlementProposer || Boolean(pendingAction)}
+                      title="Only the proposer can cancel an open settlement proposal."
+                      onClick={() => runWrite("cancelSettlementProposal", [selectedInvoiceWithBond.id])}
+                    >
+                      {pendingAction === "cancelSettlementProposal" ? <Loader2 className="spin" aria-hidden /> : <Ban aria-hidden />}
+                      Cancel split
                     </button>
                   </div>
                 ) : null}
@@ -1051,13 +1100,19 @@ function toInvoiceRecord(id: bigint, raw: unknown): InvoiceRecord {
     refundRequestedAt: BigInt(value.refundRequestedAt as bigint | string | number | undefined ?? (value[8] as bigint)),
     settlementProposedAt: BigInt(value.settlementProposedAt as bigint | string | number | undefined ?? (value[9] as bigint)),
     deliveryMarkedAt: BigInt(value.deliveryMarkedAt as bigint | string | number | undefined ?? (value[10] as bigint)),
-    state: Number(value.state ?? value[11]),
-    metadataHash: String(value.metadataHash ?? value[12] ?? ""),
-    deliveryHash: String(value.deliveryHash ?? value[13] ?? ""),
-    settlementMemoHash: String(value.settlementMemoHash ?? value[14] ?? ""),
-    settlementProposedBy: (value.settlementProposedBy ?? value[15] ?? zeroAddress) as `0x${string}`,
+    deliveryEvidenceCount: BigInt(value.deliveryEvidenceCount as bigint | string | number | undefined ?? (value[11] as bigint | undefined) ?? 0n),
+    disputeMarkedAt: BigInt(value.disputeMarkedAt as bigint | string | number | undefined ?? (value[12] as bigint | undefined) ?? 0n),
+    disputeEvidenceCount: BigInt(value.disputeEvidenceCount as bigint | string | number | undefined ?? (value[13] as bigint | undefined) ?? 0n),
+    deliveryEvidenceRoot: (value.deliveryEvidenceRoot ?? value[14] ?? zeroHash) as `0x${string}`,
+    disputeEvidenceRoot: (value.disputeEvidenceRoot ?? value[15] ?? zeroHash) as `0x${string}`,
+    state: Number(value.state ?? value[16]),
+    metadataHash: String(value.metadataHash ?? value[17] ?? ""),
+    deliveryHash: String(value.deliveryHash ?? value[18] ?? ""),
+    disputeHash: String(value.disputeHash ?? value[19] ?? ""),
+    settlementMemoHash: String(value.settlementMemoHash ?? value[20] ?? ""),
+    settlementProposedBy: (value.settlementProposedBy ?? value[21] ?? zeroAddress) as `0x${string}`,
     settlementRecipientAmount: BigInt(
-      value.settlementRecipientAmount as bigint | string | number | undefined ?? (value[16] as bigint | undefined) ?? 0n
+      value.settlementRecipientAmount as bigint | string | number | undefined ?? (value[22] as bigint | undefined) ?? 0n
     ),
     serviceBondAmount: 0n,
     resolvedBondAmount: 0n,

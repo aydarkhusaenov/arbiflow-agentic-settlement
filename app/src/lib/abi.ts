@@ -28,9 +28,15 @@ export const invoiceEscrowAbi = [
           { name: "refundRequestedAt", type: "uint64", internalType: "uint64" },
           { name: "settlementProposedAt", type: "uint64", internalType: "uint64" },
           { name: "deliveryMarkedAt", type: "uint64", internalType: "uint64" },
+          { name: "deliveryEvidenceCount", type: "uint64", internalType: "uint64" },
+          { name: "disputeMarkedAt", type: "uint64", internalType: "uint64" },
+          { name: "disputeEvidenceCount", type: "uint64", internalType: "uint64" },
+          { name: "deliveryEvidenceRoot", type: "bytes32", internalType: "bytes32" },
+          { name: "disputeEvidenceRoot", type: "bytes32", internalType: "bytes32" },
           { name: "state", type: "uint8", internalType: "enum InvoiceEscrow.State" },
           { name: "metadataHash", type: "string", internalType: "string" },
           { name: "deliveryHash", type: "string", internalType: "string" },
+          { name: "disputeHash", type: "string", internalType: "string" },
           { name: "settlementMemoHash", type: "string", internalType: "string" },
           { name: "settlementProposedBy", type: "address", internalType: "address" },
           { name: "settlementRecipientAmount", type: "uint256", internalType: "uint256" }
@@ -199,6 +205,16 @@ export const invoiceEscrowAbi = [
   },
   {
     type: "function",
+    name: "markDisputed",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "invoiceId", type: "uint256", internalType: "uint256" },
+      { name: "disputeHash", type: "string", internalType: "string" }
+    ],
+    outputs: []
+  },
+  {
+    type: "function",
     name: "proposeSettlement",
     stateMutability: "nonpayable",
     inputs: [
@@ -206,6 +222,13 @@ export const invoiceEscrowAbi = [
       { name: "recipientAmount", type: "uint256", internalType: "uint256" },
       { name: "memoHash", type: "string", internalType: "string" }
     ],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "cancelSettlementProposal",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "invoiceId", type: "uint256", internalType: "uint256" }],
     outputs: []
   },
   {
