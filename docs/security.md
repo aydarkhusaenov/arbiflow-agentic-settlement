@@ -27,6 +27,8 @@
 - First delivery timestamp is preserved for SLA checks; later delivery entries cannot erase timely evidence.
 - Settlement proposers can cancel their own open proposals before counterparty acceptance.
 - Post-settlement feedback is bound to the finalized receipt hash and accumulated in a rolling root.
+- Post-settlement validator attestations are bound to the finalized receipt hash and accumulated in a separate rolling root.
+- Validator attestations require an EIP-712 validator signature, validator agent hash, attached subject agent hash, expiry, and per-validator nonce.
 - Service bonds are optional and resolved only through existing terminal states.
 
 ## Authorization
@@ -43,6 +45,8 @@
 - Settlement proposer can cancel their own open split proposal.
 - Only the non-proposing counterparty can accept a settlement proposal.
 - After final settlement, payer can review the recipient agent and recipient can review the payer agent.
+- After final settlement, any validator can submit a signed attestation for the attached payer or recipient agent.
+- Validation attestation relayers cannot spoof validators; the validator address must sign the exact receipt, subject agent, schema, evidence, verdict, score, expiry, and nonce.
 - Creator or recipient can attach an agent mandate before payment; the payer accepts those rules by funding the invoice.
 - Anyone can submit a signed mandate only if the authorized payer signed the exact EIP-712 mandate for that invoice requirement.
 - If a signed mandate has an authorized payer, only that payer can fund the invoice.
@@ -106,6 +110,11 @@ Tests cover:
 - post-settlement feedback root
 - feedback role authorization
 - feedback score bounds
+- receipt-bound validator attestation root
+- validator attestation replay rejection
+- validator attestation expiry rejection
+- validator attestation subject-agent validation
+- validator attestation signature parameter binding
 - ERC20 service bond return on split settlement
 - fee-on-transfer ERC20 invoice rejection
 - fee-on-transfer ERC20 service bond rejection
@@ -124,6 +133,7 @@ Tests cover:
 - Settlement memos and delivery evidence are off-chain references; the contract enforces consent and payouts, not truthfulness of external files.
 - Evidence roots prove the sequence of submitted references, not the factual truth of the underlying off-chain evidence.
 - Feedback roots prove that a counterparty submitted feedback after final settlement; external reputation systems still decide how to weight or moderate that feedback.
+- Validation roots prove that a validator signed an attestation about an attached agent and finalized receipt; external validation systems still decide validator trust and scoring semantics.
 - Agent mandate hashes are integrity anchors. External systems still need to store or verify the corresponding signed payload.
 - The EIP-712 signed mandate binds a payer to the invoice requirement hash, but it does not prove off-chain metadata truthfulness.
 - Action permits bound to `address(0)` can be executed by any relayer. This is intentional for open automation, but the frontend defaults to a concrete executor.

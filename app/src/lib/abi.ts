@@ -113,6 +113,23 @@ export const invoiceEscrowAbi = [
   },
   {
     type: "function",
+    name: "getValidationContext",
+    stateMutability: "view",
+    inputs: [{ name: "invoiceId", type: "uint256", internalType: "uint256" }],
+    outputs: [
+      {
+        name: "",
+        type: "tuple",
+        internalType: "struct InvoiceEscrow.ValidationContext",
+        components: [
+          { name: "count", type: "uint64", internalType: "uint64" },
+          { name: "root", type: "bytes32", internalType: "bytes32" }
+        ]
+      }
+    ]
+  },
+  {
+    type: "function",
     name: "paymentRequirementHash",
     stateMutability: "view",
     inputs: [{ name: "invoiceId", type: "uint256", internalType: "uint256" }],
@@ -167,6 +184,16 @@ export const invoiceEscrowAbi = [
     stateMutability: "view",
     inputs: [
       { name: "signer", type: "address", internalType: "address" },
+      { name: "nonce", type: "uint256", internalType: "uint256" }
+    ],
+    outputs: [{ name: "", type: "bool", internalType: "bool" }]
+  },
+  {
+    type: "function",
+    name: "usedValidationNonces",
+    stateMutability: "view",
+    inputs: [
+      { name: "validator", type: "address", internalType: "address" },
       { name: "nonce", type: "uint256", internalType: "uint256" }
     ],
     outputs: [{ name: "", type: "bool", internalType: "bool" }]
@@ -257,6 +284,60 @@ export const invoiceEscrowAbi = [
       }
     ],
     outputs: []
+  },
+  {
+    type: "function",
+    name: "submitAgentValidation",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "attestation",
+        type: "tuple",
+        internalType: "struct InvoiceEscrow.ValidationAttestation",
+        components: [
+          { name: "invoiceId", type: "uint256", internalType: "uint256" },
+          { name: "validator", type: "address", internalType: "address" },
+          { name: "validatorAgentHash", type: "bytes32", internalType: "bytes32" },
+          { name: "subjectAgentHash", type: "bytes32", internalType: "bytes32" },
+          { name: "approved", type: "bool", internalType: "bool" },
+          { name: "score", type: "int128", internalType: "int128" },
+          { name: "schemaHash", type: "bytes32", internalType: "bytes32" },
+          { name: "evidenceURI", type: "string", internalType: "string" },
+          { name: "evidenceHash", type: "bytes32", internalType: "bytes32" },
+          { name: "expiresAt", type: "uint64", internalType: "uint64" },
+          { name: "nonce", type: "uint256", internalType: "uint256" },
+          { name: "signature", type: "bytes", internalType: "bytes" }
+        ]
+      }
+    ],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "validationAttestationDigest",
+    stateMutability: "view",
+    inputs: [
+      {
+        name: "attestation",
+        type: "tuple",
+        internalType: "struct InvoiceEscrow.ValidationAttestation",
+        components: [
+          { name: "invoiceId", type: "uint256", internalType: "uint256" },
+          { name: "validator", type: "address", internalType: "address" },
+          { name: "validatorAgentHash", type: "bytes32", internalType: "bytes32" },
+          { name: "subjectAgentHash", type: "bytes32", internalType: "bytes32" },
+          { name: "approved", type: "bool", internalType: "bool" },
+          { name: "score", type: "int128", internalType: "int128" },
+          { name: "schemaHash", type: "bytes32", internalType: "bytes32" },
+          { name: "evidenceURI", type: "string", internalType: "string" },
+          { name: "evidenceHash", type: "bytes32", internalType: "bytes32" },
+          { name: "expiresAt", type: "uint64", internalType: "uint64" },
+          { name: "nonce", type: "uint256", internalType: "uint256" },
+          { name: "signature", type: "bytes", internalType: "bytes" }
+        ]
+      }
+    ],
+    outputs: [{ name: "", type: "bytes32", internalType: "bytes32" }]
   },
   {
     type: "function",

@@ -67,6 +67,18 @@ type ActionPermitForm = {
   nonce: string;
 };
 
+type ValidationForm = {
+  subject: "recipient" | "payer";
+  validatorAgent: string;
+  approved: boolean;
+  score: string;
+  schema: string;
+  evidenceURI: string;
+  evidenceHash: string;
+  expiresHours: string;
+  nonce: string;
+};
+
 type SignedActionPermit = {
   invoiceId: bigint;
   action: number;
@@ -89,6 +101,11 @@ type BondContextRecord = {
 };
 
 type FeedbackContextRecord = {
+  count: bigint;
+  root: `0x${string}`;
+};
+
+type ValidationContextRecord = {
   count: bigint;
   root: `0x${string}`;
 };
@@ -119,6 +136,18 @@ const defaultActionPermitForm: ActionPermitForm = {
   recipientAmount: "0.04",
   dataHash: "ipfs://arbiflow-agent-action",
   validAfterMinutes: "0",
+  expiresHours: "24",
+  nonce: "1"
+};
+
+const defaultValidationForm: ValidationForm = {
+  subject: "recipient",
+  validatorAgent: "erc8004:validator-agent:receipt-auditor",
+  approved: true,
+  score: "92",
+  schema: "schema:arbiflow-delivery-validation-v1",
+  evidenceURI: "ipfs://arbiflow-validator-attestation",
+  evidenceHash: "",
   expiresHours: "24",
   nonce: "1"
 };
@@ -161,6 +190,23 @@ const actionPermitTypes = {
   ]
 } as const;
 
+const validationAttestationTypes = {
+  ValidationAttestation: [
+    { name: "invoiceId", type: "uint256" },
+    { name: "validator", type: "address" },
+    { name: "validatorAgentHash", type: "bytes32" },
+    { name: "subjectAgentHash", type: "bytes32" },
+    { name: "approved", type: "bool" },
+    { name: "score", type: "int128" },
+    { name: "receiptHash", type: "bytes32" },
+    { name: "schemaHash", type: "bytes32" },
+    { name: "evidenceURIHash", type: "bytes32" },
+    { name: "evidenceHash", type: "bytes32" },
+    { name: "expiresAt", type: "uint64" },
+    { name: "nonce", type: "uint256" }
+  ]
+} as const;
+
 export default function Home() {
   const { address, isConnected, chain } = useAccount();
   const chainId = useChainId();
@@ -174,6 +220,7 @@ export default function Home() {
   const [form, setForm] = useState<CreateForm>(defaultForm);
   const [mandateForm, setMandateForm] = useState<MandateForm>(defaultMandateForm);
   const [actionPermitForm, setActionPermitForm] = useState<ActionPermitForm>(defaultActionPermitForm);
+  const [validationForm, setValidationForm] = useState<ValidationForm>(defaultValidationForm);
   const [signedActionPermit, setSignedActionPermit] = useState<SignedActionPermit | null>(null);
   const [selectedId, setSelectedId] = useState<bigint | null>(null);
   const [addressOverride, setAddressOverride] = useState("");
@@ -310,6 +357,17 @@ export default function Home() {
   });
 
   const {
+    data: selectedValidationContextData,
+    refetch: refetchValidationContext
+  } = useReadContract({
+    address: contractAddress,
+    abi: invoiceEscrowAbi,
+    functionName: "getValidationContext",
+    args: selectedInvoice ? [selectedInvoice.id] : undefined,
+    query: { enabled: Boolean(contractAddress && selectedInvoice) }
+  });
+
+  const {
     data: selectedRequirementHash,
     refetch: refetchRequirementHash
   } = useReadContract({
@@ -323,6 +381,7 @@ export default function Home() {
   const selectedAgentContext = selectedAgentContextData ? toAgentContextRecord(selectedAgentContextData) : undefined;
   const selectedBondContext = selectedBondContextData ? toBondContextRecord(selectedBondContextData) : undefined;
   const selectedFeedbackContext = selectedFeedbackContextData ? toFeedbackContextRecord(selectedFeedbackContextData) : undefined;
+  const selectedValidationContext = selectedValidationContextData ? toValidationContextRecord(selectedValidationContextData) : undefined;
   const selectedInvoiceWithBond =
     selectedInvoice && selectedBondContext
       ? {
@@ -351,6 +410,17 @@ export default function Home() {
   const mandateAttached = Boolean(selectedAgentContext && selectedAgentContext.mandateHash !== zeroHash);
   const canSubmitFeedback = Boolean(
     selectedInvoiceWithBond && selectedInvoiceWithBond.state >= 3 && selectedInvoiceWithBond.state <= 6 && (isSelectedPayer || isSelectedRecipient)
+  );
+  const validationSubjectHash =
+    validationForm.subject === "recipient"
+      ? selectedAgentContext?.recipientAgentHash ?? zeroHash
+      : selectedAgentContext?.payerAgentHash ?? zeroHash;
+  const canSubmitValidation = Boolean(
+    selectedInvoiceWithBond &&
+      selectedInvoiceWithBond.state >= 3 &&
+      selectedInvoiceWithBond.state <= 6 &&
+      selectedAgentContext &&
+      validationSubjectHash !== zeroHash
   );
   const isSettlementProposer = Boolean(
     selectedInvoiceWithBond &&
@@ -393,6 +463,7 @@ export default function Home() {
     await refetchBondContext();
     await refetchRequirementHash();
     await refetchFeedbackContext();
+    await refetchValidationContext();
   }
 
   async function submitCreate(event: FormEvent<HTMLFormElement>) {
@@ -751,6 +822,112 @@ export default function Home() {
     ]);
   }
 
+  async function submitValidation(invoice: InvoiceRecord) {
+    if (!walletClient || !address || !contractAddress || !publicClient) {
+      setTxError("Wallet signing is unavailable.");
+      return;
+    }
+    if (!canSubmitValidation || validationSubjectHash === zeroHash) {
+      setTxError("Attach an agent mandate and finalize the invoice before validation.");
+      return;
+    }
+
+    const score = Math.round(Number(validationForm.score || "0"));
+    if (!Number.isFinite(score) || score < -100 || score > 100) {
+      setTxError("Validation score must be between -100 and 100.");
+      return;
+    }
+
+    let nonce: bigint;
+    try {
+      nonce = BigInt(validationForm.nonce || "0");
+    } catch {
+      setTxError("Validation nonce is invalid.");
+      return;
+    }
+    if (nonce < 0n) {
+      setTxError("Validation nonce is invalid.");
+      return;
+    }
+
+    const validatorAgentHash = hashOrZero(validationForm.validatorAgent);
+    if (validatorAgentHash === zeroHash) {
+      setTxError("Validator agent hash or text is required.");
+      return;
+    }
+
+    const evidenceURI = validationForm.evidenceURI.trim();
+    if (!evidenceURI) {
+      setTxError("Validation evidence URI is required.");
+      return;
+    }
+
+    const expiresHours = Math.max(1, Number(validationForm.expiresHours || "1"));
+    const expiresAt = BigInt(Math.floor(Date.now() / 1000) + Math.round(expiresHours * HOUR));
+    const schemaHash = hashOrZero(validationForm.schema);
+    const evidenceHash = hashOrZero(validationForm.evidenceHash);
+    const receiptHash =
+      selectedReceiptHash ??
+      ((await publicClient.readContract({
+        address: contractAddress,
+        abi: invoiceEscrowAbi,
+        functionName: "settlementReceiptHash",
+        args: [invoice.id]
+      })) as `0x${string}`);
+    const evidenceURIHash = keccak256(toBytes(evidenceURI));
+
+    try {
+      setPendingAction("submitAgentValidation");
+      setTxError("");
+      const signature = await walletClient.signTypedData({
+        account: address,
+        domain: {
+          name: "ArbiFlow Agentic Settlement",
+          version: "1",
+          chainId,
+          verifyingContract: contractAddress
+        },
+        primaryType: "ValidationAttestation",
+        types: validationAttestationTypes,
+        message: {
+          invoiceId: invoice.id,
+          validator: address,
+          validatorAgentHash,
+          subjectAgentHash: validationSubjectHash,
+          approved: validationForm.approved,
+          score: BigInt(score),
+          receiptHash,
+          schemaHash,
+          evidenceURIHash,
+          evidenceHash,
+          expiresAt,
+          nonce
+        }
+      });
+
+      await runWrite("submitAgentValidation", [
+        {
+          invoiceId: invoice.id,
+          validator: address,
+          validatorAgentHash,
+          subjectAgentHash: validationSubjectHash,
+          approved: validationForm.approved,
+          score: BigInt(score),
+          schemaHash,
+          evidenceURI,
+          evidenceHash,
+          expiresAt,
+          nonce,
+          signature
+        }
+      ]);
+    } catch (error) {
+      setTxError(getErrorMessage(error));
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
   async function runWrite(functionName: string, args: readonly unknown[], value?: bigint) {
     if (!contractAddress) {
       setTxError("Contract address is required.");
@@ -1036,6 +1213,10 @@ export default function Home() {
                 <div>
                   <dt>Feedback</dt>
                   <dd>{selectedFeedbackContext && selectedFeedbackContext.count > 0n ? `${selectedFeedbackContext.count.toString()} item` : "none"}</dd>
+                </div>
+                <div>
+                  <dt>Validation</dt>
+                  <dd>{selectedValidationContext && selectedValidationContext.count > 0n ? `${selectedValidationContext.count.toString()} item` : "none"}</dd>
                 </div>
               </dl>
 
@@ -1483,6 +1664,117 @@ export default function Home() {
                   <small>Counterparty feedback is linked to the finalized settlement receipt.</small>
                 </div>
               </section>
+
+              <section className="settlementDesk" aria-label="Agent validation">
+                <div className="splitInputs">
+                  <label>
+                    Subject
+                    <select
+                      value={validationForm.subject}
+                      onChange={(event) =>
+                        setValidationForm({ ...validationForm, subject: event.target.value as ValidationForm["subject"] })
+                      }
+                    >
+                      <option value="recipient">Service agent</option>
+                      <option value="payer">Payer agent</option>
+                    </select>
+                  </label>
+                  <label>
+                    Verdict
+                    <select
+                      value={validationForm.approved ? "approved" : "rejected"}
+                      onChange={(event) => setValidationForm({ ...validationForm, approved: event.target.value === "approved" })}
+                    >
+                      <option value="approved">Approved</option>
+                      <option value="rejected">Rejected</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="splitInputs">
+                  <label>
+                    Score
+                    <input
+                      value={validationForm.score}
+                      onChange={(event) => setValidationForm({ ...validationForm, score: event.target.value })}
+                      inputMode="numeric"
+                      placeholder="92"
+                    />
+                  </label>
+                  <label>
+                    Expires
+                    <input
+                      value={validationForm.expiresHours}
+                      onChange={(event) => setValidationForm({ ...validationForm, expiresHours: event.target.value })}
+                      inputMode="decimal"
+                      placeholder="24"
+                    />
+                  </label>
+                </div>
+                <label>
+                  Validator agent
+                  <input
+                    value={validationForm.validatorAgent}
+                    onChange={(event) => setValidationForm({ ...validationForm, validatorAgent: event.target.value })}
+                    placeholder="erc8004:validator-agent"
+                    spellCheck={false}
+                  />
+                </label>
+                <label>
+                  Schema
+                  <input
+                    value={validationForm.schema}
+                    onChange={(event) => setValidationForm({ ...validationForm, schema: event.target.value })}
+                    placeholder="schema:validation-v1"
+                    spellCheck={false}
+                  />
+                </label>
+                <label>
+                  Evidence URI
+                  <input
+                    value={validationForm.evidenceURI}
+                    onChange={(event) => setValidationForm({ ...validationForm, evidenceURI: event.target.value })}
+                    placeholder="ipfs://validator-attestation"
+                    spellCheck={false}
+                  />
+                </label>
+                <div className="splitInputs">
+                  <label>
+                    Evidence hash
+                    <input
+                      value={validationForm.evidenceHash}
+                      onChange={(event) => setValidationForm({ ...validationForm, evidenceHash: event.target.value })}
+                      placeholder="0x... optional"
+                      spellCheck={false}
+                    />
+                  </label>
+                  <label>
+                    Nonce
+                    <input
+                      value={validationForm.nonce}
+                      onChange={(event) => setValidationForm({ ...validationForm, nonce: event.target.value })}
+                      inputMode="numeric"
+                      placeholder="1"
+                    />
+                  </label>
+                </div>
+                <button
+                  className="button action"
+                  type="button"
+                  disabled={!isConnected || !canSubmitValidation || Boolean(pendingAction)}
+                  title="Sign and submit a receipt-bound validator attestation for the selected agent."
+                  onClick={() => submitValidation(selectedInvoiceWithBond)}
+                >
+                  {pendingAction === "submitAgentValidation" ? <Loader2 className="spin" aria-hidden /> : <ShieldCheck aria-hidden />}
+                  Submit validation
+                </button>
+                <div className="proposalBox">
+                  <span>Validation root</span>
+                  <strong>{selectedValidationContext && selectedValidationContext.root !== zeroHash ? shortHash(selectedValidationContext.root) : "none"}</strong>
+                  <small>
+                    Subject {shortHash(validationSubjectHash)} · {selectedValidationContext?.count.toString() ?? "0"} receipt-bound attestation
+                  </small>
+                </div>
+              </section>
             </>
           ) : (
             <div className="emptyState">Select an invoice</div>
@@ -1588,6 +1880,14 @@ function toBondContextRecord(raw: unknown): BondContextRecord {
 }
 
 function toFeedbackContextRecord(raw: unknown): FeedbackContextRecord {
+  const value = raw as Record<string, unknown> & readonly unknown[];
+  return {
+    count: BigInt(value.count as bigint | string | number | undefined ?? (value[0] as bigint | undefined) ?? 0n),
+    root: (value.root ?? value[1] ?? zeroHash) as `0x${string}`
+  };
+}
+
+function toValidationContextRecord(raw: unknown): ValidationContextRecord {
   const value = raw as Record<string, unknown> & readonly unknown[];
   return {
     count: BigInt(value.count as bigint | string | number | undefined ?? (value[0] as bigint | undefined) ?? 0n),

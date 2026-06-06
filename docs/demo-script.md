@@ -13,6 +13,7 @@ Use this script for screenshots or a live walkthrough. No personal video is requ
 7. Sign a scoped action permit for `Release funds` with the connected wallet as executor.
 8. Execute the signed permit and show that the release uses the signer permission, not a broad approval.
 9. Show the invoice closing as `Released`, bond returned to provider, and the finalized settlement receipt.
+10. Submit a validator attestation for the service agent and show the validation root update.
 
 ## Flow 2: Evidence And Dispute
 
@@ -30,6 +31,7 @@ Use this script for screenshots or a live walkthrough. No personal video is requ
 12. Payer accepts the settlement.
 13. Show final state `Settled`, bond returned, and the receipt hash that can feed reputation later.
 14. Submit counterparty feedback and show the feedback root update.
+15. Submit a validator attestation against the finalized receipt and show the validation root update.
 
 ## Flow 3: Timeout Protection
 
@@ -47,6 +49,7 @@ Use this script for screenshots or a live walkthrough. No personal video is requ
 - It reads delivery and dispute evidence chain counts so both sides have an auditable trail.
 - It can sign and execute scoped action permits for one exact invoice action with expiry, nonce, executor, and parameter hash.
 - After final settlement, it lets counterparties submit receipt-bound feedback for agent reputation.
+- After final settlement, it lets independent validators submit receipt-bound attestations for validation registries.
 - It reads service bond status and explains whether the bond is active, returned, or slashed.
 - There is no admin withdrawal or trusted arbitrator.
 - Every fund movement is either direct release, timeout path, refund approval, or counterparty-accepted settlement.

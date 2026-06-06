@@ -26,6 +26,7 @@ Fast agent payments are useful, but real commerce also needs:
 - post-settlement counterparty feedback for agent reputation systems
 - provider-side economic accountability when SLA is missed
 - scoped action delegation so agents can execute exactly approved follow-up steps without wallet custody
+- independent validation attestations so validators can audit finalized outcomes without controlling escrow funds
 
 ## ArbiFlow Position
 
@@ -44,6 +45,7 @@ ArbiFlow is the settlement layer around agentic payment:
 - scoped EIP-712 action permits for release, refund, evidence, and settlement actions
 - portable receipt hash when the invoice closes
 - receipt-bound counterparty feedback that can feed ERC-8004-style reputation or validation registries
+- receipt-bound validator attestations that can feed ERC-8004-style validation registries
 
 ## Security Research Applied
 
@@ -55,10 +57,12 @@ ArbiFlow is the settlement layer around agentic payment:
 - ERC-7715, EIP-7702, and ERC-4337 research drove action permits: signed one-action permissions with executor binding, nonce replay protection, expiry, valid-after windows, and exact parameter hashing.
 - Real dispute workflows pushed the design from mutable single evidence strings to append-only delivery and dispute roots included in final receipts.
 - ERC-8004 reputation concepts pushed the design toward feedback events and rolling roots instead of trying to make ArbiFlow itself a global reputation registry.
+- ERC-8004 validation concepts pushed the design toward signed validator attestations after final settlement. Validators can create an audit trail, but they cannot release, refund, slash, or arbitrate funds.
 
 ## Sources
 
 - ERC-8004: https://eips.ethereum.org/EIPS/eip-8004
+- NIST AI agent identity and authorization concept paper: https://www.nccoe.nist.gov/sites/default/files/2026-02/accelerating-the-adoption-of-software-and-ai-agent-identity-and-authorization-concept-paper.pdf
 - Coinbase x402 docs: https://docs.cdp.coinbase.com/x402/welcome
 - Google Cloud AP2 announcement: https://cloud.google.com/blog/products/ai-machine-learning/announcing-agents-to-payments-ap2-protocol
 - AP2 prompt-injection red-team paper: https://arxiv.org/abs/2601.22569

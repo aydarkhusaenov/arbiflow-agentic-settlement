@@ -20,6 +20,9 @@ contract InvoiceEscrow is ReentrancyGuard {
     bytes32 public constant ACTION_PERMIT_TYPEHASH = keccak256(
         "ActionPermit(uint256 invoiceId,uint8 action,address signer,address executor,bytes32 paramsHash,uint64 validAfter,uint64 expiresAt,uint256 nonce)"
     );
+    bytes32 public constant VALIDATION_ATTESTATION_TYPEHASH = keccak256(
+        "ValidationAttestation(uint256 invoiceId,address validator,bytes32 validatorAgentHash,bytes32 subjectAgentHash,bool approved,int128 score,bytes32 receiptHash,bytes32 schemaHash,bytes32 evidenceURIHash,bytes32 evidenceHash,uint64 expiresAt,uint256 nonce)"
+    );
     uint256 private constant SECP256K1_HALF_ORDER =
         0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0;
 
@@ -94,6 +97,11 @@ contract InvoiceEscrow is ReentrancyGuard {
         bytes32 root;
     }
 
+    struct ValidationContext {
+        uint64 count;
+        bytes32 root;
+    }
+
     struct ActionPermitCall {
         uint256 invoiceId;
         PermitAction action;
@@ -107,12 +115,29 @@ contract InvoiceEscrow is ReentrancyGuard {
         bytes signature;
     }
 
+    struct ValidationAttestation {
+        uint256 invoiceId;
+        address validator;
+        bytes32 validatorAgentHash;
+        bytes32 subjectAgentHash;
+        bool approved;
+        int128 score;
+        bytes32 schemaHash;
+        string evidenceURI;
+        bytes32 evidenceHash;
+        uint64 expiresAt;
+        uint256 nonce;
+        bytes signature;
+    }
+
     uint256 public invoiceCount;
     mapping(uint256 invoiceId => Invoice) private invoices;
     mapping(uint256 invoiceId => AgentContext) private agentContexts;
     mapping(uint256 invoiceId => BondContext) private bondContexts;
     mapping(uint256 invoiceId => FeedbackContext) private feedbackContexts;
+    mapping(uint256 invoiceId => ValidationContext) private validationContexts;
     mapping(address signer => mapping(uint256 nonce => bool)) public usedActionNonces;
+    mapping(address validator => mapping(uint256 nonce => bool)) public usedValidationNonces;
 
     event InvoiceCreated(
         uint256 indexed invoiceId,
@@ -200,6 +225,20 @@ contract InvoiceEscrow is ReentrancyGuard {
         uint256 nonce,
         bytes32 paramsHash
     );
+    event AgentValidationSubmitted(
+        uint256 indexed invoiceId,
+        address indexed validator,
+        bytes32 indexed subjectAgentHash,
+        bytes32 validatorAgentHash,
+        bool approved,
+        int128 score,
+        bytes32 schemaHash,
+        string evidenceURI,
+        bytes32 evidenceHash,
+        bytes32 receiptHash,
+        uint64 validationCount,
+        bytes32 validationRoot
+    );
 
     error InvalidRecipient();
     error InvalidAmount();
@@ -225,6 +264,9 @@ contract InvoiceEscrow is ReentrancyGuard {
     error ActionPermitNotActive();
     error ActionPermitExpired();
     error ActionPermitUsed();
+    error InvalidValidation();
+    error ValidationAttestationExpired();
+    error ValidationAttestationUsed();
 
     function createInvoice(
         address recipient,
@@ -684,6 +726,11 @@ contract InvoiceEscrow is ReentrancyGuard {
         return feedbackContexts[invoiceId];
     }
 
+    function getValidationContext(uint256 invoiceId) external view returns (ValidationContext memory) {
+        _invoiceView(invoiceId);
+        return validationContexts[invoiceId];
+    }
+
     function submitAgentFeedback(
         uint256 invoiceId,
         bool recipientAgent,
@@ -744,6 +791,74 @@ contract InvoiceEscrow is ReentrancyGuard {
             receiptHash,
             feedbackCount,
             feedbackRoot
+        );
+    }
+
+    function submitAgentValidation(ValidationAttestation calldata attestation) external nonReentrant {
+        Invoice storage invoice = _invoice(attestation.invoiceId);
+        if (!_isFinal(invoice.state)) revert InvalidState(State.Released, invoice.state);
+        if (attestation.validator == address(0)) revert InvalidValidation();
+        if (attestation.validatorAgentHash == bytes32(0)) revert InvalidValidation();
+        if (attestation.score < -100 || attestation.score > 100) revert InvalidValidation();
+        if (attestation.expiresAt != 0 && block.timestamp >= attestation.expiresAt) {
+            revert ValidationAttestationExpired();
+        }
+        if (usedValidationNonces[attestation.validator][attestation.nonce]) revert ValidationAttestationUsed();
+
+        AgentContext storage context = agentContexts[attestation.invoiceId];
+        if (
+            attestation.subjectAgentHash == bytes32(0)
+                || (
+                    attestation.subjectAgentHash != context.payerAgentHash
+                        && attestation.subjectAgentHash != context.recipientAgentHash
+                )
+        ) revert InvalidValidation();
+
+        bytes32 receiptHash = settlementReceiptHash(attestation.invoiceId);
+        bytes32 digest = _validationAttestationDigest(attestation, receiptHash);
+        if (!_isValidSignature(attestation.validator, digest, attestation.signature)) revert InvalidSignature();
+
+        usedValidationNonces[attestation.validator][attestation.nonce] = true;
+
+        ValidationContext storage validation = validationContexts[attestation.invoiceId];
+        uint64 validationCount = validation.count + 1;
+        bytes32 evidenceURIHash = keccak256(bytes(attestation.evidenceURI));
+        bytes32 validationRoot = keccak256(
+            abi.encode(
+                "ARBIFLOW_AGENT_VALIDATION_V1",
+                validation.root,
+                block.chainid,
+                address(this),
+                attestation.invoiceId,
+                receiptHash,
+                attestation.validator,
+                attestation.validatorAgentHash,
+                attestation.subjectAgentHash,
+                attestation.approved,
+                attestation.score,
+                validationCount,
+                attestation.schemaHash,
+                evidenceURIHash,
+                attestation.evidenceHash,
+                attestation.nonce
+            )
+        );
+        validation.count = validationCount;
+        validation.root = validationRoot;
+
+        emit AgentValidationSubmitted(
+            attestation.invoiceId,
+            attestation.validator,
+            attestation.subjectAgentHash,
+            attestation.validatorAgentHash,
+            attestation.approved,
+            attestation.score,
+            attestation.schemaHash,
+            attestation.evidenceURI,
+            attestation.evidenceHash,
+            receiptHash,
+            validationCount,
+            validationRoot
         );
     }
 
@@ -828,6 +943,10 @@ contract InvoiceEscrow is ReentrancyGuard {
                 )
             )
         );
+    }
+
+    function validationAttestationDigest(ValidationAttestation calldata attestation) public view returns (bytes32) {
+        return _validationAttestationDigest(attestation, settlementReceiptHash(attestation.invoiceId));
     }
 
     function eip712DomainSeparator() public view returns (bytes32) {
@@ -963,6 +1082,35 @@ contract InvoiceEscrow is ReentrancyGuard {
 
     function _requireEmptyActionParams(ActionPermitCall calldata permit) private pure {
         if (permit.recipientAmount != 0 || bytes(permit.dataHash).length != 0) revert InvalidActionPermit();
+    }
+
+    function _validationAttestationDigest(
+        ValidationAttestation calldata attestation,
+        bytes32 receiptHash
+    ) private view returns (bytes32) {
+        return keccak256(
+            abi.encodePacked(
+                "\x19\x01",
+                eip712DomainSeparator(),
+                keccak256(
+                    abi.encode(
+                        VALIDATION_ATTESTATION_TYPEHASH,
+                        attestation.invoiceId,
+                        attestation.validator,
+                        attestation.validatorAgentHash,
+                        attestation.subjectAgentHash,
+                        attestation.approved,
+                        attestation.score,
+                        receiptHash,
+                        attestation.schemaHash,
+                        keccak256(bytes(attestation.evidenceURI)),
+                        attestation.evidenceHash,
+                        attestation.expiresAt,
+                        attestation.nonce
+                    )
+                )
+            )
+        );
     }
 
     function _isValidSignature(address signer, bytes32 digest, bytes calldata signature) private view returns (bool) {

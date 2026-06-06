@@ -164,6 +164,82 @@ describe("InvoiceEscrow", function () {
     };
   }
 
+  async function signValidationAttestation(id, validator, subjectAgentHash, overrides = {}) {
+    const now = await latestTimestamp();
+    const validatorAgentHash = overrides.validatorAgentHash ?? ethers.id("erc8004:validator-agent:receipt-auditor");
+    const approved = overrides.approved ?? true;
+    const score = overrides.score ?? 92;
+    const schemaHash = overrides.schemaHash ?? ethers.id("schema:arbiflow-delivery-validation-v1");
+    const evidenceURI = overrides.evidenceURI ?? "ipfs://validator-attestation";
+    const evidenceHash = overrides.evidenceHash ?? ethers.id("validator evidence payload");
+    const expiresAt = overrides.expiresAt ?? now + DAY;
+    const nonce = overrides.nonce ?? 1n;
+    const receiptHash = overrides.receiptHash ?? (await escrow.settlementReceiptHash(id));
+    const evidenceURIHash = ethers.id(evidenceURI);
+    const { chainId } = await ethers.provider.getNetwork();
+    const domain = {
+      name: "ArbiFlow Agentic Settlement",
+      version: "1",
+      chainId,
+      verifyingContract: await escrow.getAddress()
+    };
+    const types = {
+      ValidationAttestation: [
+        { name: "invoiceId", type: "uint256" },
+        { name: "validator", type: "address" },
+        { name: "validatorAgentHash", type: "bytes32" },
+        { name: "subjectAgentHash", type: "bytes32" },
+        { name: "approved", type: "bool" },
+        { name: "score", type: "int128" },
+        { name: "receiptHash", type: "bytes32" },
+        { name: "schemaHash", type: "bytes32" },
+        { name: "evidenceURIHash", type: "bytes32" },
+        { name: "evidenceHash", type: "bytes32" },
+        { name: "expiresAt", type: "uint64" },
+        { name: "nonce", type: "uint256" }
+      ]
+    };
+    const value = {
+      invoiceId: id,
+      validator: validator.address,
+      validatorAgentHash,
+      subjectAgentHash,
+      approved,
+      score,
+      receiptHash,
+      schemaHash,
+      evidenceURIHash,
+      evidenceHash,
+      expiresAt,
+      nonce
+    };
+    const signature = await validator.signTypedData(domain, types, value);
+    return {
+      validatorAgentHash,
+      approved,
+      score,
+      schemaHash,
+      evidenceURI,
+      evidenceHash,
+      receiptHash,
+      nonce,
+      call: {
+        invoiceId: id,
+        validator: validator.address,
+        validatorAgentHash,
+        subjectAgentHash,
+        approved,
+        score,
+        schemaHash,
+        evidenceURI,
+        evidenceHash,
+        expiresAt,
+        nonce,
+        signature
+      }
+    };
+  }
+
   it("creates invoices with expected fields", async function () {
     const { id, params } = await createEthInvoice();
 
@@ -781,6 +857,104 @@ describe("InvoiceEscrow", function () {
     await expect(
       escrow.connect(payer).submitAgentFeedback(id, false, 50, "wrong-side", "", "ipfs://bad", ZERO_HASH)
     ).to.be.revertedWithCustomError(escrow, "Unauthorized");
+  });
+
+  it("accepts receipt-bound validator attestations for attached agents", async function () {
+    const { id, params } = await createEthInvoice();
+    const payerAgentHash = ethers.id("payer-agent-validation");
+    const recipientAgentHash = ethers.id("recipient-agent-validation");
+
+    await escrow
+      .connect(creator)
+      .attachAgentMandate(
+        id,
+        payerAgentHash,
+        recipientAgentHash,
+        ethers.id("validation mandate"),
+        ethers.id("validation policy"),
+        (await latestTimestamp()) + DAY
+      );
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+    await escrow.connect(payer).release(id);
+
+    const signed = await signValidationAttestation(id, other, recipientAgentHash, { nonce: 21n });
+    const validationTx = await escrow.connect(creator).submitAgentValidation(signed.call);
+    const validationReceipt = await validationTx.wait();
+    const validationEvent = validationReceipt.logs.find(
+      (log) => log.fragment && log.fragment.name === "AgentValidationSubmitted"
+    );
+
+    const context = await escrow.getValidationContext(id);
+    expect(context.count).to.equal(1);
+    expect(context.root).to.not.equal(ZERO_HASH);
+    expect(await escrow.usedValidationNonces(other.address, 21n)).to.equal(true);
+    expect(validationEvent.args.invoiceId).to.equal(id);
+    expect(validationEvent.args.validator).to.equal(other.address);
+    expect(validationEvent.args.subjectAgentHash).to.equal(recipientAgentHash);
+    expect(validationEvent.args.validatorAgentHash).to.equal(signed.validatorAgentHash);
+    expect(validationEvent.args.approved).to.equal(true);
+    expect(validationEvent.args.score).to.equal(92);
+    expect(validationEvent.args.schemaHash).to.equal(signed.schemaHash);
+    expect(validationEvent.args.evidenceURI).to.equal(signed.evidenceURI);
+    expect(validationEvent.args.evidenceHash).to.equal(signed.evidenceHash);
+    expect(validationEvent.args.receiptHash).to.equal(signed.receiptHash);
+    expect(validationEvent.args.validationCount).to.equal(1);
+    expect(validationEvent.args.validationRoot).to.equal(context.root);
+
+    await expect(escrow.connect(creator).submitAgentValidation(signed.call)).to.be.revertedWithCustomError(
+      escrow,
+      "ValidationAttestationUsed"
+    );
+  });
+
+  it("rejects invalid validator attestations before they alter validation roots", async function () {
+    const { id, params } = await createEthInvoice({ timeout: HOUR });
+    const payerAgentHash = ethers.id("payer-agent-validation-reject");
+    const recipientAgentHash = ethers.id("recipient-agent-validation-reject");
+
+    await escrow
+      .connect(creator)
+      .attachAgentMandate(id, payerAgentHash, recipientAgentHash, ethers.id("validation reject mandate"), ZERO_HASH, 0);
+
+    const early = await signValidationAttestation(id, other, recipientAgentHash, { nonce: 31n });
+    await expect(escrow.connect(creator).submitAgentValidation(early.call)).to.be.revertedWithCustomError(
+      escrow,
+      "InvalidState"
+    );
+
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+    await escrow.connect(payer).release(id);
+
+    const expired = await signValidationAttestation(id, other, recipientAgentHash, {
+      expiresAt: await latestTimestamp(),
+      nonce: 32n
+    });
+    await expect(escrow.connect(creator).submitAgentValidation(expired.call)).to.be.revertedWithCustomError(
+      escrow,
+      "ValidationAttestationExpired"
+    );
+
+    const wrongSubject = await signValidationAttestation(id, other, ethers.id("unknown-agent"), { nonce: 33n });
+    await expect(escrow.connect(creator).submitAgentValidation(wrongSubject.call)).to.be.revertedWithCustomError(
+      escrow,
+      "InvalidValidation"
+    );
+
+    const signed = await signValidationAttestation(id, other, recipientAgentHash, { nonce: 34n });
+    const tampered = { ...signed.call, score: 91 };
+    await expect(escrow.connect(creator).submitAgentValidation(tampered)).to.be.revertedWithCustomError(
+      escrow,
+      "InvalidSignature"
+    );
+
+    await expect(
+      escrow.connect(creator).submitAgentValidation({ ...signed.call, score: 101 })
+    ).to.be.revertedWithCustomError(escrow, "InvalidValidation");
+
+    const context = await escrow.getValidationContext(id);
+    expect(context.count).to.equal(0);
+    expect(context.root).to.equal(ZERO_HASH);
+    expect(await escrow.usedValidationNonces(other.address, 34n)).to.equal(false);
   });
 
   it("prevents wrong caller release before timeout and double release", async function () {

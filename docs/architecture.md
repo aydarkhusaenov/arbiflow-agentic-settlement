@@ -203,6 +203,19 @@ After final settlement, counterparties can submit agent feedback linked to the f
 
 This is designed as an ERC-8004-style reputation bridge. ArbiFlow does not become the reputation registry; it emits receipt-bound feedback that registries, validators, and indexers can consume.
 
+## Agent Validation
+
+After final settlement, independent validators can submit EIP-712 signed validation attestations linked to the finalized receipt:
+
+- validator address signs the attestation
+- validator agent hash identifies the validation agent, auditor, TEE oracle, or re-execution network
+- subject agent hash must match the invoice payer agent or recipient/service agent
+- verdict, score, validation schema hash, evidence URI, evidence payload hash, expiry, and nonce are signed
+- anyone can relay the signed attestation
+- `getValidationContext(invoiceId)` exposes a rolling validation root and count
+
+Validation attestations are post-settlement accountability records. They do not release funds, refund funds, slash bonds, or arbitrate disputes. This is deliberate: ArbiFlow remains the settlement layer, while ERC-8004-style validation systems can index the receipt-bound attestations and decide how to weight them.
+
 ## Agent Layer
 
 The agent is deterministic by default. It reads:
