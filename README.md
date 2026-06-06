@@ -37,13 +37,14 @@ pnpm build
 - Append-only delivery and dispute evidence roots for two-sided audit trails.
 - Counterparty-approved partial settlements for disputes without a centralized arbitrator.
 - Hashed agent mandates, policy hashes, SLA deadline, and portable settlement receipt hashes.
+- Post-settlement agent feedback roots for ERC-8004-style reputation pipelines.
 - EIP-712 signed payer mandates that bind authorization to the exact invoice payment requirement.
 - x402-style payment requirement hashes for API/agent facilitators to verify before escrow funding.
 - Optional provider service bonds that return on clean settlement and can be slashed for missed SLA without timely delivery evidence.
 - Timeout paths for inactive counterparties.
 - ETH and ERC20 support.
 - Agent panel that reads live contract state, wallet role, timing windows, evidence, and settlement proposals.
-- Contract tests for success, failure, authorization, signed mandates, evidence roots, dispute evidence, timeout, service bond, fee-on-transfer rejection, and split-settlement paths.
+- Contract tests for success, failure, authorization, signed mandates, evidence roots, dispute evidence, feedback roots, timeout, service bond, fee-on-transfer rejection, and split-settlement paths.
 
 ## Local Contract Workflow
 

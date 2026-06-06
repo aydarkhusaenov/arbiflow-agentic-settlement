@@ -64,6 +64,11 @@ type BondContextRecord = {
   slashed: boolean;
 };
 
+type FeedbackContextRecord = {
+  count: bigint;
+  root: `0x${string}`;
+};
+
 const defaultForm: CreateForm = {
   recipient: "",
   token: "",
@@ -120,6 +125,11 @@ export default function Home() {
   const [settlementAmount, setSettlementAmount] = useState("");
   const [settlementMemoHash, setSettlementMemoHash] = useState("ipfs://arbiflow-settlement-plan");
   const [serviceBondAmount, setServiceBondAmount] = useState("0.01");
+  const [feedbackScore, setFeedbackScore] = useState("90");
+  const [feedbackTag1, setFeedbackTag1] = useState("settlement");
+  const [feedbackTag2, setFeedbackTag2] = useState("agent");
+  const [feedbackURI, setFeedbackURI] = useState("ipfs://arbiflow-agent-feedback");
+  const [feedbackHash, setFeedbackHash] = useState("");
 
   useEffect(() => {
     const storedAddress = window.localStorage.getItem("arbiflow-contract-address");
@@ -223,6 +233,17 @@ export default function Home() {
   });
 
   const {
+    data: selectedFeedbackContextData,
+    refetch: refetchFeedbackContext
+  } = useReadContract({
+    address: contractAddress,
+    abi: invoiceEscrowAbi,
+    functionName: "getFeedbackContext",
+    args: selectedInvoice ? [selectedInvoice.id] : undefined,
+    query: { enabled: Boolean(contractAddress && selectedInvoice) }
+  });
+
+  const {
     data: selectedRequirementHash,
     refetch: refetchRequirementHash
   } = useReadContract({
@@ -235,6 +256,7 @@ export default function Home() {
 
   const selectedAgentContext = selectedAgentContextData ? toAgentContextRecord(selectedAgentContextData) : undefined;
   const selectedBondContext = selectedBondContextData ? toBondContextRecord(selectedBondContextData) : undefined;
+  const selectedFeedbackContext = selectedFeedbackContextData ? toFeedbackContextRecord(selectedFeedbackContextData) : undefined;
   const selectedInvoiceWithBond =
     selectedInvoice && selectedBondContext
       ? {
@@ -261,6 +283,9 @@ export default function Home() {
   const canProposeSettlement = Boolean(selectedInvoiceWithBond && isSelectedActive && (isSelectedRecipient || isSelectedPayer));
   const settlementOpen = Boolean(selectedInvoiceWithBond && selectedInvoiceWithBond.settlementProposedBy !== zeroAddress);
   const mandateAttached = Boolean(selectedAgentContext && selectedAgentContext.mandateHash !== zeroHash);
+  const canSubmitFeedback = Boolean(
+    selectedInvoiceWithBond && selectedInvoiceWithBond.state >= 3 && selectedInvoiceWithBond.state <= 6 && (isSelectedPayer || isSelectedRecipient)
+  );
   const isSettlementProposer = Boolean(
     selectedInvoiceWithBond &&
       address &&
@@ -292,6 +317,7 @@ export default function Home() {
     await refetchReceiptHash();
     await refetchBondContext();
     await refetchRequirementHash();
+    await refetchFeedbackContext();
   }
 
   async function submitCreate(event: FormEvent<HTMLFormElement>) {
@@ -502,6 +528,28 @@ export default function Home() {
       return;
     }
     await runWrite("postServiceBond", [invoice.id, amount], invoice.token === zeroAddress ? amount : undefined);
+  }
+
+  async function submitFeedback(invoice: InvoiceRecord) {
+    const score = Math.round(Number(feedbackScore || "0"));
+    if (!Number.isFinite(score) || score < -100 || score > 100) {
+      setTxError("Feedback score must be between -100 and 100.");
+      return;
+    }
+    if (!isSelectedPayer && !isSelectedRecipient) {
+      setTxError("Only payer or recipient can submit settlement feedback.");
+      return;
+    }
+
+    await runWrite("submitAgentFeedback", [
+      invoice.id,
+      isSelectedPayer,
+      BigInt(score),
+      feedbackTag1,
+      feedbackTag2,
+      feedbackURI,
+      hashOrZero(feedbackHash)
+    ]);
   }
 
   async function runWrite(functionName: string, args: readonly unknown[], value?: bigint) {
@@ -786,6 +834,10 @@ export default function Home() {
                   <dt>Bond</dt>
                   <dd>{formatBondStatus(selectedInvoiceWithBond)}</dd>
                 </div>
+                <div>
+                  <dt>Feedback</dt>
+                  <dd>{selectedFeedbackContext && selectedFeedbackContext.count > 0n ? `${selectedFeedbackContext.count.toString()} item` : "none"}</dd>
+                </div>
               </dl>
 
               <div className="actionStack">
@@ -1027,6 +1079,73 @@ export default function Home() {
                   <li key={note}>{note}</li>
                 ))}
               </ul>
+
+              <section className="settlementDesk" aria-label="Agent feedback">
+                <div className="splitInputs">
+                  <label>
+                    Score
+                    <input
+                      value={feedbackScore}
+                      onChange={(event) => setFeedbackScore(event.target.value)}
+                      inputMode="numeric"
+                      placeholder="90"
+                    />
+                  </label>
+                  <label>
+                    Tag
+                    <input
+                      value={feedbackTag1}
+                      onChange={(event) => setFeedbackTag1(event.target.value)}
+                      placeholder="settlement"
+                      spellCheck={false}
+                    />
+                  </label>
+                </div>
+                <div className="splitInputs">
+                  <label>
+                    Detail tag
+                    <input
+                      value={feedbackTag2}
+                      onChange={(event) => setFeedbackTag2(event.target.value)}
+                      placeholder="agent"
+                      spellCheck={false}
+                    />
+                  </label>
+                  <label>
+                    Feedback URI
+                    <input
+                      value={feedbackURI}
+                      onChange={(event) => setFeedbackURI(event.target.value)}
+                      placeholder="ipfs://feedback"
+                      spellCheck={false}
+                    />
+                  </label>
+                </div>
+                <label>
+                  Feedback hash
+                  <input
+                    value={feedbackHash}
+                    onChange={(event) => setFeedbackHash(event.target.value)}
+                    placeholder="0x... optional"
+                    spellCheck={false}
+                  />
+                </label>
+                <button
+                  className="button action"
+                  type="button"
+                  disabled={!isConnected || !canSubmitFeedback || Boolean(pendingAction)}
+                  title="After final settlement, payer reviews service agent and recipient reviews payer agent."
+                  onClick={() => submitFeedback(selectedInvoiceWithBond)}
+                >
+                  {pendingAction === "submitAgentFeedback" ? <Loader2 className="spin" aria-hidden /> : <ShieldCheck aria-hidden />}
+                  Submit feedback
+                </button>
+                <div className="proposalBox">
+                  <span>Feedback root</span>
+                  <strong>{selectedFeedbackContext && selectedFeedbackContext.root !== zeroHash ? shortHash(selectedFeedbackContext.root) : "none"}</strong>
+                  <small>Counterparty feedback is linked to the finalized settlement receipt.</small>
+                </div>
+              </section>
             </>
           ) : (
             <div className="emptyState">Select an invoice</div>
@@ -1128,6 +1247,14 @@ function toBondContextRecord(raw: unknown): BondContextRecord {
     resolvedAmount: BigInt(value.resolvedAmount as bigint | string | number | undefined ?? (value[1] as bigint | undefined) ?? 0n),
     resolvedRecipient: (value.resolvedRecipient ?? value[2] ?? zeroAddress) as `0x${string}`,
     slashed: Boolean(value.slashed ?? value[3] ?? false)
+  };
+}
+
+function toFeedbackContextRecord(raw: unknown): FeedbackContextRecord {
+  const value = raw as Record<string, unknown> & readonly unknown[];
+  return {
+    count: BigInt(value.count as bigint | string | number | undefined ?? (value[0] as bigint | undefined) ?? 0n),
+    root: (value.root ?? value[1] ?? zeroHash) as `0x${string}`
   };
 }
 

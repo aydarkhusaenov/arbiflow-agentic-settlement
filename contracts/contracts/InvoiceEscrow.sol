@@ -75,10 +75,16 @@ contract InvoiceEscrow is ReentrancyGuard {
         bool slashed;
     }
 
+    struct FeedbackContext {
+        uint64 count;
+        bytes32 root;
+    }
+
     uint256 public invoiceCount;
     mapping(uint256 invoiceId => Invoice) private invoices;
     mapping(uint256 invoiceId => AgentContext) private agentContexts;
     mapping(uint256 invoiceId => BondContext) private bondContexts;
+    mapping(uint256 invoiceId => FeedbackContext) private feedbackContexts;
 
     event InvoiceCreated(
         uint256 indexed invoiceId,
@@ -144,6 +150,20 @@ contract InvoiceEscrow is ReentrancyGuard {
         string disputeHash
     );
     event SettlementProposalCancelled(uint256 indexed invoiceId, address indexed cancelledBy);
+    event AgentFeedbackSubmitted(
+        uint256 indexed invoiceId,
+        address indexed reviewer,
+        bytes32 indexed agentHash,
+        bool recipientAgent,
+        int128 score,
+        string tag1,
+        string tag2,
+        string feedbackURI,
+        bytes32 feedbackHash,
+        bytes32 receiptHash,
+        uint64 feedbackCount,
+        bytes32 feedbackRoot
+    );
 
     error InvalidRecipient();
     error InvalidAmount();
@@ -164,6 +184,7 @@ contract InvoiceEscrow is ReentrancyGuard {
     error InvalidSignature();
     error MandateExpired();
     error InvalidEvidence();
+    error InvalidFeedback();
 
     function createInvoice(
         address recipient,
@@ -551,6 +572,74 @@ contract InvoiceEscrow is ReentrancyGuard {
     function getBondContext(uint256 invoiceId) external view returns (BondContext memory) {
         _invoiceView(invoiceId);
         return bondContexts[invoiceId];
+    }
+
+    function getFeedbackContext(uint256 invoiceId) external view returns (FeedbackContext memory) {
+        _invoiceView(invoiceId);
+        return feedbackContexts[invoiceId];
+    }
+
+    function submitAgentFeedback(
+        uint256 invoiceId,
+        bool recipientAgent,
+        int128 score,
+        string calldata tag1,
+        string calldata tag2,
+        string calldata feedbackURI,
+        bytes32 feedbackHash
+    ) external nonReentrant {
+        Invoice storage invoice = _invoice(invoiceId);
+        if (!_isFinal(invoice.state)) revert InvalidState(State.Released, invoice.state);
+        if (score < -100 || score > 100) revert InvalidFeedback();
+
+        AgentContext storage context = agentContexts[invoiceId];
+        bytes32 agentHash = recipientAgent ? context.recipientAgentHash : context.payerAgentHash;
+        if (agentHash == bytes32(0)) revert InvalidFeedback();
+        if (recipientAgent) {
+            if (msg.sender != invoice.payer) revert Unauthorized();
+        } else if (msg.sender != invoice.recipient) {
+            revert Unauthorized();
+        }
+
+        bytes32 receiptHash = settlementReceiptHash(invoiceId);
+        FeedbackContext storage feedback = feedbackContexts[invoiceId];
+        uint64 feedbackCount = feedback.count + 1;
+        bytes32 feedbackRoot = keccak256(
+            abi.encode(
+                "ARBIFLOW_AGENT_FEEDBACK_V1",
+                feedback.root,
+                block.chainid,
+                address(this),
+                invoiceId,
+                receiptHash,
+                msg.sender,
+                agentHash,
+                recipientAgent,
+                score,
+                feedbackCount,
+                keccak256(bytes(tag1)),
+                keccak256(bytes(tag2)),
+                keccak256(bytes(feedbackURI)),
+                feedbackHash
+            )
+        );
+        feedback.count = feedbackCount;
+        feedback.root = feedbackRoot;
+
+        emit AgentFeedbackSubmitted(
+            invoiceId,
+            msg.sender,
+            agentHash,
+            recipientAgent,
+            score,
+            tag1,
+            tag2,
+            feedbackURI,
+            feedbackHash,
+            receiptHash,
+            feedbackCount,
+            feedbackRoot
+        );
     }
 
     function paymentRequirementHash(uint256 invoiceId) public view returns (bytes32) {

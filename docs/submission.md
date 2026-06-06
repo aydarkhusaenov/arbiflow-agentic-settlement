@@ -10,7 +10,7 @@ Agent-guided escrow, delivery evidence, and negotiated settlement rails for Arbi
 
 ## Short Description
 
-ArbiFlow is an Arbitrum Sepolia settlement app for freelancers, merchants, agencies, APIs, and autonomous service agents. A seller creates an invoice, a payer funds it into escrow, and both sides can move through release, refund request, delivery evidence, dispute evidence, timeout refund, counterparty-approved partial settlement, and optional provider service bonding. Each invoice can also carry hashed agent identity references, a user mandate hash, a policy hash, an SLA deadline, append-only evidence roots, an x402-style payment requirement hash, an EIP-712 signed payer mandate, and a portable settlement receipt hash. The agent panel reads live contract state and recommends only safe next actions for the connected wallet.
+ArbiFlow is an Arbitrum Sepolia settlement app for freelancers, merchants, agencies, APIs, and autonomous service agents. A seller creates an invoice, a payer funds it into escrow, and both sides can move through release, refund request, delivery evidence, dispute evidence, timeout refund, counterparty-approved partial settlement, optional provider service bonding, and post-settlement agent feedback. Each invoice can also carry hashed agent identity references, a user mandate hash, a policy hash, an SLA deadline, append-only evidence roots, an x402-style payment requirement hash, an EIP-712 signed payer mandate, a portable settlement receipt hash, and receipt-bound feedback roots. The agent panel reads live contract state and recommends only safe next actions for the connected wallet.
 
 ## Problem
 
@@ -30,7 +30,7 @@ Current agentic payment standards are moving quickly:
 - ERC-8004 focuses on agent identity, reputation, and validation registries.
 - AP2 focuses on cryptographic payment mandates and auditable proof of user intent.
 
-ArbiFlow’s differentiator is the missing commercial settlement layer between these ideas: escrowed agent commerce with x402-style payment requirement hashes, EIP-712 signed payer mandates, append-only delivery and dispute evidence roots, provider-side service bonds, counterparty-approved split settlement, SLA context, and portable receipt hashes that can later feed reputation/validation systems.
+ArbiFlow’s differentiator is the missing commercial settlement layer between these ideas: escrowed agent commerce with x402-style payment requirement hashes, EIP-712 signed payer mandates, append-only delivery and dispute evidence roots, provider-side service bonds, counterparty-approved split settlement, SLA context, portable receipt hashes, and post-settlement feedback roots that can later feed reputation/validation systems.
 
 ## Why Arbitrum
 
@@ -38,7 +38,7 @@ Arbitrum provides low-cost EVM execution and mature Solidity tooling, which is w
 
 ## Agentic Feature
 
-The agent reads the deployed contract state, connected wallet role, invoice timing, delivery evidence, dispute evidence, refund window, service bond, settlement proposal, mandate hash, authorized payer, payment requirement hash, policy hash, SLA deadline, and portable receipt hash. It recommends whether the wallet can pay, post a provider bond, cancel, attach mandate, release, request a refund, attach evidence, propose a split, cancel a stale split proposal, accept a counterparty proposal, approve a refund, or wait for timeout.
+The agent reads the deployed contract state, connected wallet role, invoice timing, delivery evidence, dispute evidence, refund window, service bond, settlement proposal, mandate hash, authorized payer, payment requirement hash, policy hash, SLA deadline, portable receipt hash, and feedback root. It recommends whether the wallet can pay, post a provider bond, cancel, attach mandate, release, request a refund, attach evidence, propose a split, cancel a stale split proposal, accept a counterparty proposal, approve a refund, submit post-settlement feedback, or wait for timeout.
 
 The agent is deliberately safe: it does not sign transactions, custody funds, or invent authorization. The smart contract enforces the state machine. The agent makes the workflow understandable and reduces user error.
 
@@ -57,12 +57,13 @@ Smart contract quality:
 - ERC-1271-compatible signature validation path for contract wallets.
 - x402-style payment requirement hash bound to invoice terms.
 - Append-only delivery and dispute evidence roots.
+- Receipt-bound post-settlement feedback roots.
 - No admin withdrawal path.
 - Counterparty-approved settlement split.
 - Proposer cancellation for stale split offers.
 - Optional provider service bond with SLA/evidence-based slashing.
 - Portable receipt hash over final settlement context.
-- Tests for success, failure, timeout, authorization, ETH, ERC20, mandate, signed-mandate, evidence-root, dispute, receipt, service bond, fee-on-transfer rejection, and split-settlement paths.
+- Tests for success, failure, timeout, authorization, ETH, ERC20, mandate, signed-mandate, evidence-root, dispute, feedback, receipt, service bond, fee-on-transfer rejection, and split-settlement paths.
 - Production dependency audit currently reports no known vulnerabilities.
 - Slither static analysis reports no reentrancy findings after hardening; remaining findings are expected timestamp deadline checks and checked ETH transfer calls.
 
@@ -78,6 +79,7 @@ Innovation and creativity:
 
 - Combines escrow payments, delivery proof, refund windows, and partial compromise settlements.
 - Gives both sides an evidence trail instead of letting the last submitted URI overwrite the record.
+- Converts final outcomes into reputation-ready feedback without making the escrow contract a centralized reputation authority.
 - Agent recommendations are based on live contract state, not generic help text.
 - Bridges agent mandates, identity references, SLA context, and settlement receipts without requiring an external registry.
 - Bridges instant-payment style requirements to escrow settlement instead of pretending HTTP payment is enough for service delivery.

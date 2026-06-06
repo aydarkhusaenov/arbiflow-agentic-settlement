@@ -525,6 +525,93 @@ describe("InvoiceEscrow", function () {
     expect(receiptEvent.args.receiptHash).to.equal(await escrow.settlementReceiptHash(id));
   });
 
+  it("accepts post-settlement agent feedback bound to the receipt hash", async function () {
+    const { id, params } = await createEthInvoice();
+    const payerAgentHash = ethers.id("payer-agent-feedback");
+    const recipientAgentHash = ethers.id("recipient-agent-feedback");
+
+    await escrow
+      .connect(creator)
+      .attachAgentMandate(
+        id,
+        payerAgentHash,
+        recipientAgentHash,
+        ethers.id("feedback mandate"),
+        ethers.id("feedback policy"),
+        (await latestTimestamp()) + DAY
+      );
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+    await escrow.connect(payer).release(id);
+
+    const receiptHash = await escrow.settlementReceiptHash(id);
+    const feedbackTx = await escrow
+      .connect(payer)
+      .submitAgentFeedback(
+        id,
+        true,
+        88,
+        "delivery",
+        "on-time",
+        "ipfs://payer-feedback",
+        ethers.id("payer feedback payload")
+      );
+    const feedbackReceipt = await feedbackTx.wait();
+    const feedbackEvent = feedbackReceipt.logs.find((log) => log.fragment && log.fragment.name === "AgentFeedbackSubmitted");
+
+    const first = await escrow.getFeedbackContext(id);
+    expect(first.count).to.equal(1);
+    expect(first.root).to.not.equal(ZERO_HASH);
+    expect(feedbackEvent.args.invoiceId).to.equal(id);
+    expect(feedbackEvent.args.reviewer).to.equal(payer.address);
+    expect(feedbackEvent.args.agentHash).to.equal(recipientAgentHash);
+    expect(feedbackEvent.args.recipientAgent).to.equal(true);
+    expect(feedbackEvent.args.score).to.equal(88);
+    expect(feedbackEvent.args.receiptHash).to.equal(receiptHash);
+    expect(feedbackEvent.args.feedbackCount).to.equal(1);
+    expect(feedbackEvent.args.feedbackRoot).to.equal(first.root);
+
+    await escrow
+      .connect(recipient)
+      .submitAgentFeedback(id, false, 75, "payment", "clear", "ipfs://recipient-feedback", ethers.id("recipient feedback payload"));
+
+    const second = await escrow.getFeedbackContext(id);
+    expect(second.count).to.equal(2);
+    expect(second.root).to.not.equal(first.root);
+  });
+
+  it("restricts agent feedback to settled counterparties and valid scores", async function () {
+    const { id, params } = await createEthInvoice();
+    await escrow
+      .connect(creator)
+      .attachAgentMandate(
+        id,
+        ethers.id("payer-agent-feedback-restrictions"),
+        ethers.id("recipient-agent-feedback-restrictions"),
+        ethers.id("feedback restrictions mandate"),
+        ZERO_HASH,
+        0
+      );
+
+    await expect(
+      escrow.connect(payer).submitAgentFeedback(id, true, 50, "early", "", "ipfs://early", ZERO_HASH)
+    ).to.be.revertedWithCustomError(escrow, "InvalidState");
+
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+    await escrow.connect(payer).release(id);
+
+    await expect(
+      escrow.connect(other).submitAgentFeedback(id, true, 50, "bad", "", "ipfs://bad", ZERO_HASH)
+    ).to.be.revertedWithCustomError(escrow, "Unauthorized");
+
+    await expect(
+      escrow.connect(payer).submitAgentFeedback(id, true, 101, "too-high", "", "ipfs://bad", ZERO_HASH)
+    ).to.be.revertedWithCustomError(escrow, "InvalidFeedback");
+
+    await expect(
+      escrow.connect(payer).submitAgentFeedback(id, false, 50, "wrong-side", "", "ipfs://bad", ZERO_HASH)
+    ).to.be.revertedWithCustomError(escrow, "Unauthorized");
+  });
+
   it("prevents wrong caller release before timeout and double release", async function () {
     const { id, params } = await createEthInvoice();
     await escrow.connect(payer).payInvoice(id, { value: params.amount });

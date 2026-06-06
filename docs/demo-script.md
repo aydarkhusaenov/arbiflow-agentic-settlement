@@ -27,6 +27,7 @@ Use this script for screenshots or a live walkthrough. No personal video is requ
 10. Show that proposer can cancel stale split offers, then create the final split offer.
 11. Payer accepts the settlement.
 12. Show final state `Settled`, bond returned, and the receipt hash that can feed reputation later.
+13. Submit counterparty feedback and show the feedback root update.
 
 ## Flow 3: Timeout Protection
 
@@ -42,6 +43,7 @@ Use this script for screenshots or a live walkthrough. No personal video is requ
 - The agent is not generic help text; it reads contract state, wallet role, timing windows, delivery evidence, and settlement proposals.
 - It also reads authorized payer, payment requirement hash, mandate hash, policy hash, SLA deadline, and portable receipt hash.
 - It reads delivery and dispute evidence chain counts so both sides have an auditable trail.
+- After final settlement, it lets counterparties submit receipt-bound feedback for agent reputation.
 - It reads service bond status and explains whether the bond is active, returned, or slashed.
 - There is no admin withdrawal or trusted arbitrator.
 - Every fund movement is either direct release, timeout path, refund approval, or counterparty-accepted settlement.

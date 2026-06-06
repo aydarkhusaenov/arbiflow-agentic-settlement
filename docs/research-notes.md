@@ -21,6 +21,7 @@ Fast agent payments are useful, but real commerce also needs:
 - dispute and compromise outcomes
 - final settlement receipts
 - accountability hooks that can feed agent reputation later
+- post-settlement counterparty feedback for agent reputation systems
 - provider-side economic accountability when SLA is missed
 
 ## ArbiFlow Position
@@ -38,6 +39,7 @@ ArbiFlow is the settlement layer around agentic payment:
 - x402-style payment requirement hashes that agents can compare before funding escrow
 - EIP-712 signed payer mandates bound to those payment requirements
 - portable receipt hash when the invoice closes
+- receipt-bound counterparty feedback that can feed ERC-8004-style reputation or validation registries
 
 ## Security Research Applied
 
@@ -47,6 +49,7 @@ ArbiFlow is the settlement layer around agentic payment:
 - Dependency audit results drove the frontend upgrade to patched Next.js and targeted pnpm overrides for vulnerable transitive packages.
 - EIP-712 and ERC-1271 research drove signed mandates that bind payer approval to the exact invoice requirement and support contract-wallet signers.
 - Real dispute workflows pushed the design from mutable single evidence strings to append-only delivery and dispute roots included in final receipts.
+- ERC-8004 reputation concepts pushed the design toward feedback events and rolling roots instead of trying to make ArbiFlow itself a global reputation registry.
 
 ## Sources
 

@@ -156,6 +156,18 @@ ArbiFlow keeps first evidence references for quick UI scanning and rolling roots
 
 This gives both sides an append-only trail without putting large files on-chain. IPFS, HTTPS, Arweave, or private evidence vault references can all be represented as hashes/URIs.
 
+## Agent Feedback
+
+After final settlement, counterparties can submit agent feedback linked to the finalized receipt:
+
+- payer reviews the recipient/service agent
+- recipient reviews the payer agent
+- score is bounded from `-100` to `100`
+- tags, feedback URI, and feedback payload hash are emitted
+- `getFeedbackContext(invoiceId)` exposes a rolling feedback root and count
+
+This is designed as an ERC-8004-style reputation bridge. ArbiFlow does not become the reputation registry; it emits receipt-bound feedback that registries, validators, and indexers can consume.
+
 ## Agent Layer
 
 The agent is deterministic by default. It reads:
@@ -199,6 +211,8 @@ The proposer can cancel their own open split proposal. This prevents stale compr
 - authorized payer and signed mandate expiry
 
 When an invoice closes through release, refund, cancellation, or settlement, the contract emits `SettlementReceiptFinalized`. This creates a compact receipt that can be indexed now and later attached to reputation systems or validator flows.
+
+Post-settlement feedback references the receipt hash instead of changing it, preserving receipt stability while allowing reputation data to accumulate after closure.
 
 ## Arbitrum Fit
 

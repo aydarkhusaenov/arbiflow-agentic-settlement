@@ -96,6 +96,23 @@ export const invoiceEscrowAbi = [
   },
   {
     type: "function",
+    name: "getFeedbackContext",
+    stateMutability: "view",
+    inputs: [{ name: "invoiceId", type: "uint256", internalType: "uint256" }],
+    outputs: [
+      {
+        name: "",
+        type: "tuple",
+        internalType: "struct InvoiceEscrow.FeedbackContext",
+        components: [
+          { name: "count", type: "uint64", internalType: "uint64" },
+          { name: "root", type: "bytes32", internalType: "bytes32" }
+        ]
+      }
+    ]
+  },
+  {
+    type: "function",
     name: "paymentRequirementHash",
     stateMutability: "view",
     inputs: [{ name: "invoiceId", type: "uint256", internalType: "uint256" }],
@@ -229,6 +246,21 @@ export const invoiceEscrowAbi = [
     name: "cancelSettlementProposal",
     stateMutability: "nonpayable",
     inputs: [{ name: "invoiceId", type: "uint256", internalType: "uint256" }],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "submitAgentFeedback",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "invoiceId", type: "uint256", internalType: "uint256" },
+      { name: "recipientAgent", type: "bool", internalType: "bool" },
+      { name: "score", type: "int128", internalType: "int128" },
+      { name: "tag1", type: "string", internalType: "string" },
+      { name: "tag2", type: "string", internalType: "string" },
+      { name: "feedbackURI", type: "string", internalType: "string" },
+      { name: "feedbackHash", type: "bytes32", internalType: "bytes32" }
+    ],
     outputs: []
   },
   {

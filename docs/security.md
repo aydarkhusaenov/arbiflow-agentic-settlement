@@ -22,6 +22,7 @@
 - Delivery evidence and payer dispute evidence append into separate rolling roots.
 - First delivery timestamp is preserved for SLA checks; later delivery entries cannot erase timely evidence.
 - Settlement proposers can cancel their own open proposals before counterparty acceptance.
+- Post-settlement feedback is bound to the finalized receipt hash and accumulated in a rolling root.
 - Service bonds are optional and resolved only through existing terminal states.
 
 ## Authorization
@@ -37,6 +38,7 @@
 - Payer or recipient can propose a partial split settlement while an invoice is paid or refund-requested.
 - Settlement proposer can cancel their own open split proposal.
 - Only the non-proposing counterparty can accept a settlement proposal.
+- After final settlement, payer can review the recipient agent and recipient can review the payer agent.
 - Creator or recipient can attach an agent mandate before payment; the payer accepts those rules by funding the invoice.
 - Anyone can submit a signed mandate only if the authorized payer signed the exact EIP-712 mandate for that invoice requirement.
 - If a signed mandate has an authorized payer, only that payer can fund the invoice.
@@ -89,6 +91,9 @@ Tests cover:
 - empty evidence rejection
 - SLA-gated recipient timeout release
 - settlement proposal cancellation
+- post-settlement feedback root
+- feedback role authorization
+- feedback score bounds
 - ERC20 service bond return on split settlement
 - fee-on-transfer ERC20 invoice rejection
 - fee-on-transfer ERC20 service bond rejection
@@ -106,6 +111,7 @@ Tests cover:
 - Metadata is stored as a string reference and is not validated on-chain.
 - Settlement memos and delivery evidence are off-chain references; the contract enforces consent and payouts, not truthfulness of external files.
 - Evidence roots prove the sequence of submitted references, not the factual truth of the underlying off-chain evidence.
+- Feedback roots prove that a counterparty submitted feedback after final settlement; external reputation systems still decide how to weight or moderate that feedback.
 - Agent mandate hashes are integrity anchors. External systems still need to store or verify the corresponding signed payload.
 - The EIP-712 signed mandate binds a payer to the invoice requirement hash, but it does not prove off-chain metadata truthfulness.
 - The in-contract EOA verifier supports standard 65-byte secp256k1 signatures. Contract wallets can use ERC-1271 validation.
