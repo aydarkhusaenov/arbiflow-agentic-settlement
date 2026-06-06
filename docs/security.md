@@ -16,6 +16,10 @@
 - Signed mandates use EIP-712 typed data bound to the invoice payment requirement hash.
 - Signed mandates can lock funding to an authorized payer and expire before payment.
 - Signature verification accepts EOA signatures and ERC-1271 contract-wallet validation.
+- Action permits use EIP-712 typed data bound to invoice id, action enum, signer, executor, exact parameter hash, validity window, expiry, and nonce.
+- Action permit execution reuses the normal escrow state machine with authorization checked against the signer, not the relayer.
+- Action permit nonces are tracked per signer to block replay across invoices and executors.
+- Action permits can be bound to one executor or intentionally left open with `address(0)`.
 - Payment requirement hashes bind invoice amount, token, recipient, due date, timeout, metadata, chain, and escrow contract.
 - Finalized receipt hashes are deterministic summaries and do not custody or redirect funds.
 - Delivery evidence stores both a reference hash and the timestamp when it was attached.
@@ -42,6 +46,8 @@
 - Creator or recipient can attach an agent mandate before payment; the payer accepts those rules by funding the invoice.
 - Anyone can submit a signed mandate only if the authorized payer signed the exact EIP-712 mandate for that invoice requirement.
 - If a signed mandate has an authorized payer, only that payer can fund the invoice.
+- Anyone can execute an action permit only if they match the signed executor binding and the signer approved the exact action parameters.
+- A permit relayer cannot gain extra rights; payer/recipient role checks still run against the permit signer.
 - Recipient can post a service bond before final invoice closure.
 - Recipient timeout release is blocked by an SLA unless delivery evidence was attached by the SLA deadline.
 - Service bond is slashed only if refund occurs after SLA, no timely delivery evidence exists, and a payer is present.
@@ -81,6 +87,12 @@ Tests cover:
 - wrong-signer signed mandate rejection
 - authorized payer payment lock
 - signed mandate expiry before payment
+- EIP-712 action permit execution
+- action permit replay rejection
+- action permit executor binding
+- action permit exact parameter binding
+- action permit expiry and not-yet-active rejection
+- action permit signer-role enforcement
 - portable settlement receipt event
 - ETH service bond return on release
 - ETH service bond slash on missed SLA
@@ -114,6 +126,7 @@ Tests cover:
 - Feedback roots prove that a counterparty submitted feedback after final settlement; external reputation systems still decide how to weight or moderate that feedback.
 - Agent mandate hashes are integrity anchors. External systems still need to store or verify the corresponding signed payload.
 - The EIP-712 signed mandate binds a payer to the invoice requirement hash, but it does not prove off-chain metadata truthfulness.
+- Action permits bound to `address(0)` can be executed by any relayer. This is intentional for open automation, but the frontend defaults to a concrete executor.
 - The in-contract EOA verifier supports standard 65-byte secp256k1 signatures. Contract wallets can use ERC-1271 validation.
 - Service bond slashing uses objective time/evidence conditions, not subjective quality evaluation.
 - No centralized arbitration layer is included by design; compromise settlement is counterparty-approved.

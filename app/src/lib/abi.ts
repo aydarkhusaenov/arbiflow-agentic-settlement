@@ -136,6 +136,43 @@ export const invoiceEscrowAbi = [
   },
   {
     type: "function",
+    name: "actionParamsHash",
+    stateMutability: "pure",
+    inputs: [
+      { name: "action", type: "uint8", internalType: "enum InvoiceEscrow.PermitAction" },
+      { name: "recipientAmount", type: "uint256", internalType: "uint256" },
+      { name: "dataHash", type: "string", internalType: "string" }
+    ],
+    outputs: [{ name: "", type: "bytes32", internalType: "bytes32" }]
+  },
+  {
+    type: "function",
+    name: "actionPermitDigest",
+    stateMutability: "view",
+    inputs: [
+      { name: "invoiceId", type: "uint256", internalType: "uint256" },
+      { name: "action", type: "uint8", internalType: "enum InvoiceEscrow.PermitAction" },
+      { name: "signer", type: "address", internalType: "address" },
+      { name: "executor", type: "address", internalType: "address" },
+      { name: "paramsHash", type: "bytes32", internalType: "bytes32" },
+      { name: "validAfter", type: "uint64", internalType: "uint64" },
+      { name: "expiresAt", type: "uint64", internalType: "uint64" },
+      { name: "nonce", type: "uint256", internalType: "uint256" }
+    ],
+    outputs: [{ name: "", type: "bytes32", internalType: "bytes32" }]
+  },
+  {
+    type: "function",
+    name: "usedActionNonces",
+    stateMutability: "view",
+    inputs: [
+      { name: "signer", type: "address", internalType: "address" },
+      { name: "nonce", type: "uint256", internalType: "uint256" }
+    ],
+    outputs: [{ name: "", type: "bool", internalType: "bool" }]
+  },
+  {
+    type: "function",
     name: "createInvoice",
     stateMutability: "nonpayable",
     inputs: [
@@ -193,6 +230,31 @@ export const invoiceEscrowAbi = [
     inputs: [
       { name: "invoiceId", type: "uint256", internalType: "uint256" },
       { name: "amount", type: "uint256", internalType: "uint256" }
+    ],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "executeActionPermit",
+    stateMutability: "nonpayable",
+    inputs: [
+      {
+        name: "permit",
+        type: "tuple",
+        internalType: "struct InvoiceEscrow.ActionPermitCall",
+        components: [
+          { name: "invoiceId", type: "uint256", internalType: "uint256" },
+          { name: "action", type: "uint8", internalType: "enum InvoiceEscrow.PermitAction" },
+          { name: "signer", type: "address", internalType: "address" },
+          { name: "executor", type: "address", internalType: "address" },
+          { name: "recipientAmount", type: "uint256", internalType: "uint256" },
+          { name: "dataHash", type: "string", internalType: "string" },
+          { name: "validAfter", type: "uint64", internalType: "uint64" },
+          { name: "expiresAt", type: "uint64", internalType: "uint64" },
+          { name: "nonce", type: "uint256", internalType: "uint256" },
+          { name: "signature", type: "bytes", internalType: "bytes" }
+        ]
+      }
     ],
     outputs: []
   },

@@ -46,6 +46,11 @@ Created, Paid, or RefundRequested
   v
 Provider bond locked
 
+Paid or RefundRequested
+  | executeActionPermit with signer EIP-712 approval
+  v
+Normal release, refund, evidence, or settlement action
+
 Created
   | cancelUnpaid by creator or recipient
   v
@@ -107,6 +112,36 @@ Signed mandates use an EIP-712 `PaymentMandate` over:
 - mandate expiry
 
 The signature verifier supports normal EOA signatures and ERC-1271 contract-wallet validation. If an authorized payer is set, only that payer can fund the invoice and the mandate must still be unexpired.
+
+## Scoped Action Permits
+
+ArbiFlow also supports EIP-712 `ActionPermit` signatures for post-payment workflow automation. A payer or recipient can sign one bounded action for an executor without handing over private keys or granting broad approval.
+
+The signed payload includes:
+
+- invoice id
+- action enum
+- signer
+- executor
+- exact action parameter hash
+- `validAfter`
+- `expiresAt`
+- nonce
+
+`executeActionPermit` checks executor binding, time window, replay nonce, and EOA or ERC-1271 signature validity. It then calls the same internal functions used by direct wallet actions, with authorization evaluated against the signer instead of the relayer.
+
+Supported delegated actions are:
+
+- release
+- request refund
+- refund
+- mark delivered
+- mark disputed
+- propose split settlement
+- cancel split proposal
+- accept split settlement
+
+This is the wallet-permission layer around the escrow. It mirrors the direction of scoped permissions and account-abstraction execution while staying deployable today on Arbitrum Sepolia.
 
 ## Payment Requirement
 

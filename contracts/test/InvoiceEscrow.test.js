@@ -5,6 +5,16 @@ const ZERO_ADDRESS = ethers.ZeroAddress;
 const ZERO_HASH = ethers.ZeroHash;
 const HOUR = 60 * 60;
 const DAY = 24 * HOUR;
+const PermitAction = {
+  Release: 0,
+  RequestRefund: 1,
+  Refund: 2,
+  MarkDelivered: 3,
+  MarkDisputed: 4,
+  ProposeSettlement: 5,
+  CancelSettlementProposal: 6,
+  AcceptSettlement: 7
+};
 
 async function latestTimestamp() {
   const block = await ethers.provider.getBlock("latest");
@@ -100,6 +110,58 @@ describe("InvoiceEscrow", function () {
     };
     const signature = await signer.signTypedData(domain, types, value);
     return { payerAgentHash, recipientAgentHash, mandateHash, policyHash, slaDeadline, mandateExpiresAt, signature };
+  }
+
+  async function signActionPermit(id, signer, executor, action, recipientAmount = 0n, dataHash = "", nonce = 1n, overrides = {}) {
+    const now = await latestTimestamp();
+    const validAfter = overrides.validAfter ?? 0;
+    const expiresAt = overrides.expiresAt ?? now + DAY;
+    const paramsHash = await escrow.actionParamsHash(action, recipientAmount, dataHash);
+    const { chainId } = await ethers.provider.getNetwork();
+    const domain = {
+      name: "ArbiFlow Agentic Settlement",
+      version: "1",
+      chainId,
+      verifyingContract: await escrow.getAddress()
+    };
+    const types = {
+      ActionPermit: [
+        { name: "invoiceId", type: "uint256" },
+        { name: "action", type: "uint8" },
+        { name: "signer", type: "address" },
+        { name: "executor", type: "address" },
+        { name: "paramsHash", type: "bytes32" },
+        { name: "validAfter", type: "uint64" },
+        { name: "expiresAt", type: "uint64" },
+        { name: "nonce", type: "uint256" }
+      ]
+    };
+    const value = {
+      invoiceId: id,
+      action,
+      signer: signer.address,
+      executor,
+      paramsHash,
+      validAfter,
+      expiresAt,
+      nonce
+    };
+    const signature = await signer.signTypedData(domain, types, value);
+    return {
+      paramsHash,
+      call: {
+        invoiceId: id,
+        action,
+        signer: signer.address,
+        executor,
+        recipientAmount,
+        dataHash,
+        validAfter,
+        expiresAt,
+        nonce,
+        signature
+      }
+    };
   }
 
   it("creates invoices with expected fields", async function () {
@@ -307,6 +369,115 @@ describe("InvoiceEscrow", function () {
       escrow,
       "MandateExpired"
     );
+  });
+
+  it("executes a payer-signed refund request permit once through the bound executor", async function () {
+    const { id, params } = await createEthInvoice();
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+
+    const permit = await signActionPermit(id, payer, other.address, PermitAction.RequestRefund, 0n, "", 11n);
+
+    await expect(escrow.connect(other).executeActionPermit(permit.call))
+      .to.emit(escrow, "ActionPermitExecuted")
+      .withArgs(id, payer.address, other.address, PermitAction.RequestRefund, 11n, permit.paramsHash);
+
+    const invoice = await escrow.getInvoice(id);
+    expect(invoice.state).to.equal(2);
+    expect(await escrow.usedActionNonces(payer.address, 11n)).to.equal(true);
+
+    await expect(escrow.connect(other).executeActionPermit(permit.call)).to.be.revertedWithCustomError(
+      escrow,
+      "ActionPermitUsed"
+    );
+  });
+
+  it("lets a recipient delegate exact delivery evidence while rejecting the wrong executor", async function () {
+    const { id, params } = await createEthInvoice();
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+
+    const permit = await signActionPermit(
+      id,
+      recipient,
+      other.address,
+      PermitAction.MarkDelivered,
+      0n,
+      "ipfs://agent-delivery-evidence",
+      12n
+    );
+
+    await expect(escrow.connect(creator).executeActionPermit(permit.call)).to.be.revertedWithCustomError(
+      escrow,
+      "Unauthorized"
+    );
+    await escrow.connect(other).executeActionPermit(permit.call);
+
+    const invoice = await escrow.getInvoice(id);
+    expect(invoice.deliveryHash).to.equal("ipfs://agent-delivery-evidence");
+    expect(invoice.deliveryEvidenceCount).to.equal(1);
+    expect(await escrow.usedActionNonces(recipient.address, 12n)).to.equal(true);
+  });
+
+  it("binds settlement permits to exact amount and memo parameters", async function () {
+    const { id, params } = await createEthInvoice();
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+
+    const recipientAmount = ethers.parseEther("0.65");
+    const permit = await signActionPermit(
+      id,
+      payer,
+      other.address,
+      PermitAction.ProposeSettlement,
+      recipientAmount,
+      "ipfs://agent-proposed-65-35",
+      13n
+    );
+    const tampered = { ...permit.call, recipientAmount: recipientAmount + 1n };
+
+    await expect(escrow.connect(other).executeActionPermit(tampered)).to.be.revertedWithCustomError(
+      escrow,
+      "InvalidSignature"
+    );
+
+    await escrow.connect(other).executeActionPermit(permit.call);
+    const invoice = await escrow.getInvoice(id);
+    expect(invoice.settlementProposedBy).to.equal(payer.address);
+    expect(invoice.settlementRecipientAmount).to.equal(recipientAmount);
+    expect(invoice.settlementMemoHash).to.equal("ipfs://agent-proposed-65-35");
+  });
+
+  it("rejects action permits outside their time window", async function () {
+    const { id, params } = await createEthInvoice({ timeout: HOUR });
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+    const now = await latestTimestamp();
+
+    const expired = await signActionPermit(id, payer, other.address, PermitAction.RequestRefund, 0n, "", 14n, {
+      expiresAt: now
+    });
+    await expect(escrow.connect(other).executeActionPermit(expired.call)).to.be.revertedWithCustomError(
+      escrow,
+      "ActionPermitExpired"
+    );
+
+    const inactive = await signActionPermit(id, payer, other.address, PermitAction.RequestRefund, 0n, "", 15n, {
+      validAfter: now + HOUR
+    });
+    await expect(escrow.connect(other).executeActionPermit(inactive.call)).to.be.revertedWithCustomError(
+      escrow,
+      "ActionPermitNotActive"
+    );
+  });
+
+  it("still checks invoice roles against the permit signer, not the relayer", async function () {
+    const { id, params } = await createEthInvoice();
+    await escrow.connect(payer).payInvoice(id, { value: params.amount });
+
+    const permit = await signActionPermit(id, other, other.address, PermitAction.Release, 0n, "", 16n);
+
+    await expect(escrow.connect(other).executeActionPermit(permit.call)).to.be.revertedWithCustomError(
+      escrow,
+      "Unauthorized"
+    );
+    expect(await escrow.usedActionNonces(other.address, 16n)).to.equal(false);
   });
 
   it("prevents agent mandate overwrite after first attachment", async function () {

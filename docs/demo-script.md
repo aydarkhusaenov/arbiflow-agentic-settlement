@@ -10,8 +10,9 @@ Use this script for screenshots or a live walkthrough. No personal video is requ
 4. Recipient posts a small service bond.
 5. Fund the invoice from the authorized payer wallet.
 6. Show the agent panel reading the live `Paid` state, authorized payer, payment requirement hash, mandate hash, SLA, delivery/dispute evidence counts, bond, and receipt hash.
-7. Release funds from payer to recipient.
-8. Show the invoice closing as `Released`, bond returned to provider, and the finalized settlement receipt.
+7. Sign a scoped action permit for `Release funds` with the connected wallet as executor.
+8. Execute the signed permit and show that the release uses the signer permission, not a broad approval.
+9. Show the invoice closing as `Released`, bond returned to provider, and the finalized settlement receipt.
 
 ## Flow 2: Evidence And Dispute
 
@@ -23,11 +24,12 @@ Use this script for screenshots or a live walkthrough. No personal video is requ
 6. Payer requests a refund.
 7. Payer attaches dispute evidence.
 8. Agent shows refund window, delivery evidence, dispute evidence, timeout, mandate context, bond status, and settlement options.
-9. Recipient proposes a partial split, for example `80%` recipient and `20%` payer refund.
-10. Show that proposer can cancel stale split offers, then create the final split offer.
-11. Payer accepts the settlement.
-12. Show final state `Settled`, bond returned, and the receipt hash that can feed reputation later.
-13. Submit counterparty feedback and show the feedback root update.
+9. Recipient signs a scoped action permit for `Propose split`, with exact payout amount and memo hash.
+10. Execute the permit and show the open partial split, for example `80%` recipient and `20%` payer refund.
+11. Show that proposer can cancel stale split offers, then create the final split offer.
+12. Payer accepts the settlement.
+13. Show final state `Settled`, bond returned, and the receipt hash that can feed reputation later.
+14. Submit counterparty feedback and show the feedback root update.
 
 ## Flow 3: Timeout Protection
 
@@ -43,6 +45,7 @@ Use this script for screenshots or a live walkthrough. No personal video is requ
 - The agent is not generic help text; it reads contract state, wallet role, timing windows, delivery evidence, and settlement proposals.
 - It also reads authorized payer, payment requirement hash, mandate hash, policy hash, SLA deadline, and portable receipt hash.
 - It reads delivery and dispute evidence chain counts so both sides have an auditable trail.
+- It can sign and execute scoped action permits for one exact invoice action with expiry, nonce, executor, and parameter hash.
 - After final settlement, it lets counterparties submit receipt-bound feedback for agent reputation.
 - It reads service bond status and explains whether the bond is active, returned, or slashed.
 - There is no admin withdrawal or trusted arbitrator.

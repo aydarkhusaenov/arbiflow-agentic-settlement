@@ -57,6 +57,30 @@ type MandateForm = {
   mandateExpiryHours: string;
 };
 
+type ActionPermitForm = {
+  action: string;
+  executor: string;
+  recipientAmount: string;
+  dataHash: string;
+  validAfterMinutes: string;
+  expiresHours: string;
+  nonce: string;
+};
+
+type SignedActionPermit = {
+  invoiceId: bigint;
+  action: number;
+  signer: `0x${string}`;
+  executor: `0x${string}`;
+  recipientAmount: bigint;
+  dataHash: string;
+  validAfter: bigint;
+  expiresAt: bigint;
+  nonce: bigint;
+  signature: `0x${string}`;
+  paramsHash: `0x${string}`;
+};
+
 type BondContextRecord = {
   activeAmount: bigint;
   resolvedAmount: bigint;
@@ -89,6 +113,27 @@ const defaultMandateForm: MandateForm = {
   mandateExpiryHours: "168"
 };
 
+const defaultActionPermitForm: ActionPermitForm = {
+  action: "1",
+  executor: "",
+  recipientAmount: "0.04",
+  dataHash: "ipfs://arbiflow-agent-action",
+  validAfterMinutes: "0",
+  expiresHours: "24",
+  nonce: "1"
+};
+
+const permitActionOptions = [
+  { value: 0, label: "Release funds", needsAmount: false, needsData: false },
+  { value: 1, label: "Request refund", needsAmount: false, needsData: false },
+  { value: 2, label: "Refund", needsAmount: false, needsData: false },
+  { value: 3, label: "Mark delivered", needsAmount: false, needsData: true },
+  { value: 4, label: "Mark dispute", needsAmount: false, needsData: true },
+  { value: 5, label: "Propose split", needsAmount: true, needsData: true },
+  { value: 6, label: "Cancel split", needsAmount: false, needsData: false },
+  { value: 7, label: "Accept split", needsAmount: false, needsData: false }
+] as const;
+
 const paymentMandateTypes = {
   PaymentMandate: [
     { name: "invoiceId", type: "uint256" },
@@ -100,6 +145,19 @@ const paymentMandateTypes = {
     { name: "policyHash", type: "bytes32" },
     { name: "slaDeadline", type: "uint64" },
     { name: "expiresAt", type: "uint64" }
+  ]
+} as const;
+
+const actionPermitTypes = {
+  ActionPermit: [
+    { name: "invoiceId", type: "uint256" },
+    { name: "action", type: "uint8" },
+    { name: "signer", type: "address" },
+    { name: "executor", type: "address" },
+    { name: "paramsHash", type: "bytes32" },
+    { name: "validAfter", type: "uint64" },
+    { name: "expiresAt", type: "uint64" },
+    { name: "nonce", type: "uint256" }
   ]
 } as const;
 
@@ -115,6 +173,8 @@ export default function Home() {
 
   const [form, setForm] = useState<CreateForm>(defaultForm);
   const [mandateForm, setMandateForm] = useState<MandateForm>(defaultMandateForm);
+  const [actionPermitForm, setActionPermitForm] = useState<ActionPermitForm>(defaultActionPermitForm);
+  const [signedActionPermit, setSignedActionPermit] = useState<SignedActionPermit | null>(null);
   const [selectedId, setSelectedId] = useState<bigint | null>(null);
   const [addressOverride, setAddressOverride] = useState("");
   const [pendingAction, setPendingAction] = useState<string | null>(null);
@@ -141,6 +201,12 @@ export default function Home() {
       setForm((current) => ({ ...current, recipient: address }));
     }
   }, [address, form.recipient]);
+
+  useEffect(() => {
+    if (address && !actionPermitForm.executor) {
+      setActionPermitForm((current) => ({ ...current, executor: address }));
+    }
+  }, [address, actionPermitForm.executor]);
 
   const contractAddress = useMemo(() => {
     const envAddress = process.env.NEXT_PUBLIC_ESCROW_ADDRESS;
@@ -298,11 +364,20 @@ export default function Home() {
       address &&
       selectedInvoiceWithBond.settlementProposedBy.toLowerCase() !== address.toLowerCase()
   );
+  const selectedPermitAction =
+    permitActionOptions.find((option) => option.value === Number(actionPermitForm.action)) ?? permitActionOptions[1];
+  const signedPermitReadyForSelection = Boolean(signedActionPermit && selectedInvoiceWithBond?.id === signedActionPermit.invoiceId);
+  const connectedCanExecutePermit = Boolean(
+    signedActionPermit &&
+      address &&
+      (signedActionPermit.executor === zeroAddress || signedActionPermit.executor.toLowerCase() === address.toLowerCase())
+  );
 
   useEffect(() => {
     if (!selectedInvoice) return;
     const suggested = (selectedInvoice.amount * 8n) / 10n;
     setSettlementAmount(trimDecimal(formatEther(suggested)));
+    setSignedActionPermit(null);
   }, [selectedInvoiceId]);
 
   function updateContractAddress(nextAddress: string) {
@@ -512,6 +587,130 @@ export default function Home() {
       slaDeadline,
       mandateExpiresAt,
       signature
+    ]);
+  }
+
+  async function signActionPermit(invoice: InvoiceRecord) {
+    if (!walletClient || !address || !contractAddress || !publicClient) {
+      setTxError("Wallet signing is unavailable.");
+      return;
+    }
+
+    const executor = actionPermitForm.executor.trim();
+    if (!isAddress(executor)) {
+      setTxError("Executor address is invalid.");
+      return;
+    }
+
+    const action = selectedPermitAction.value;
+    const dataHash = selectedPermitAction.needsData ? actionPermitForm.dataHash.trim() : "";
+    if (selectedPermitAction.needsData && !dataHash) {
+      setTxError("Permit data hash is required.");
+      return;
+    }
+
+    let recipientAmount = 0n;
+    if (selectedPermitAction.needsAmount) {
+      try {
+        recipientAmount = parseEther(actionPermitForm.recipientAmount || "0");
+      } catch {
+        setTxError("Permit recipient amount is invalid.");
+        return;
+      }
+      if (recipientAmount > invoice.amount) {
+        setTxError("Permit recipient amount cannot exceed invoice amount.");
+        return;
+      }
+    }
+
+    let nonce: bigint;
+    try {
+      nonce = BigInt(actionPermitForm.nonce || "0");
+    } catch {
+      setTxError("Permit nonce is invalid.");
+      return;
+    }
+    if (nonce < 0n) {
+      setTxError("Permit nonce is invalid.");
+      return;
+    }
+
+    const validAfterMinutes = Math.max(0, Number(actionPermitForm.validAfterMinutes || "0"));
+    const expiresHours = Math.max(1, Number(actionPermitForm.expiresHours || "1"));
+    const now = Math.floor(Date.now() / 1000);
+    const validAfter = validAfterMinutes > 0 ? BigInt(now + Math.round(validAfterMinutes * 60)) : 0n;
+    const expiresAt = BigInt(now + Math.round(expiresHours * HOUR));
+
+    try {
+      setPendingAction("signActionPermit");
+      setTxError("");
+      const paramsHash = (await publicClient.readContract({
+        address: contractAddress,
+        abi: invoiceEscrowAbi,
+        functionName: "actionParamsHash",
+        args: [action, recipientAmount, dataHash]
+      })) as `0x${string}`;
+
+      const signature = await walletClient.signTypedData({
+        account: address,
+        domain: {
+          name: "ArbiFlow Agentic Settlement",
+          version: "1",
+          chainId,
+          verifyingContract: contractAddress
+        },
+        primaryType: "ActionPermit",
+        types: actionPermitTypes,
+        message: {
+          invoiceId: invoice.id,
+          action,
+          signer: address,
+          executor: executor as `0x${string}`,
+          paramsHash,
+          validAfter,
+          expiresAt,
+          nonce
+        }
+      });
+
+      setSignedActionPermit({
+        invoiceId: invoice.id,
+        action,
+        signer: address,
+        executor: executor as `0x${string}`,
+        recipientAmount,
+        dataHash,
+        validAfter,
+        expiresAt,
+        nonce,
+        signature,
+        paramsHash
+      });
+    } catch (error) {
+      setTxError(getErrorMessage(error));
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
+  async function executeSignedActionPermit() {
+    if (!signedActionPermit) {
+      setTxError("No signed action permit is ready.");
+      return;
+    }
+    await runWrite("executeActionPermit", [
+      {
+        invoiceId: signedActionPermit.invoiceId,
+        action: signedActionPermit.action,
+        signer: signedActionPermit.signer,
+        executor: signedActionPermit.executor,
+        recipientAmount: signedActionPermit.recipientAmount,
+        dataHash: signedActionPermit.dataHash,
+        validAfter: signedActionPermit.validAfter,
+        expiresAt: signedActionPermit.expiresAt,
+        nonce: signedActionPermit.nonce,
+        signature: signedActionPermit.signature
+      }
     ]);
   }
 
@@ -941,6 +1140,144 @@ export default function Home() {
                     <small>
                       Requirement {selectedRequirementHash ? shortHash(selectedRequirementHash) : "pending"} · Payer{" "}
                       {selectedAgentContext.authorizedPayer !== zeroAddress ? shortAddress(selectedAgentContext.authorizedPayer) : "open"}
+                    </small>
+                  </div>
+                ) : null}
+              </section>
+
+              <section className="settlementDesk" aria-label="Action permit">
+                <div className="splitInputs">
+                  <label>
+                    Permit action
+                    <select
+                      value={actionPermitForm.action}
+                      onChange={(event) => {
+                        setSignedActionPermit(null);
+                        setActionPermitForm({ ...actionPermitForm, action: event.target.value });
+                      }}
+                    >
+                      {permitActionOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Executor
+                    <input
+                      value={actionPermitForm.executor}
+                      onChange={(event) => {
+                        setSignedActionPermit(null);
+                        setActionPermitForm({ ...actionPermitForm, executor: event.target.value });
+                      }}
+                      placeholder="0x..."
+                      spellCheck={false}
+                    />
+                  </label>
+                </div>
+
+                {selectedPermitAction.needsAmount || selectedPermitAction.needsData ? (
+                  <div className="splitInputs">
+                    <label>
+                      Recipient payout
+                      <input
+                        value={actionPermitForm.recipientAmount}
+                        onChange={(event) => {
+                          setSignedActionPermit(null);
+                          setActionPermitForm({ ...actionPermitForm, recipientAmount: event.target.value });
+                        }}
+                        disabled={!selectedPermitAction.needsAmount}
+                        inputMode="decimal"
+                        placeholder="0.04"
+                      />
+                    </label>
+                    <label>
+                      Data hash
+                      <input
+                        value={actionPermitForm.dataHash}
+                        onChange={(event) => {
+                          setSignedActionPermit(null);
+                          setActionPermitForm({ ...actionPermitForm, dataHash: event.target.value });
+                        }}
+                        disabled={!selectedPermitAction.needsData}
+                        placeholder="ipfs://agent-action"
+                        spellCheck={false}
+                      />
+                    </label>
+                  </div>
+                ) : null}
+
+                <div className="splitInputs">
+                  <label>
+                    Valid after
+                    <input
+                      value={actionPermitForm.validAfterMinutes}
+                      onChange={(event) => {
+                        setSignedActionPermit(null);
+                        setActionPermitForm({ ...actionPermitForm, validAfterMinutes: event.target.value });
+                      }}
+                      inputMode="decimal"
+                      placeholder="0"
+                    />
+                  </label>
+                  <label>
+                    Expires
+                    <input
+                      value={actionPermitForm.expiresHours}
+                      onChange={(event) => {
+                        setSignedActionPermit(null);
+                        setActionPermitForm({ ...actionPermitForm, expiresHours: event.target.value });
+                      }}
+                      inputMode="decimal"
+                      placeholder="24"
+                    />
+                  </label>
+                </div>
+
+                <label>
+                  Nonce
+                  <input
+                    value={actionPermitForm.nonce}
+                    onChange={(event) => {
+                      setSignedActionPermit(null);
+                      setActionPermitForm({ ...actionPermitForm, nonce: event.target.value });
+                    }}
+                    inputMode="numeric"
+                    placeholder="1"
+                  />
+                </label>
+
+                <div className="splitInputs">
+                  <button
+                    className="button action"
+                    type="button"
+                    disabled={!isConnected || !selectedInvoiceWithBond || Boolean(pendingAction)}
+                    title="Sign a scoped EIP-712 action permit."
+                    onClick={() => signActionPermit(selectedInvoiceWithBond)}
+                  >
+                    {pendingAction === "signActionPermit" ? <Loader2 className="spin" aria-hidden /> : <ShieldCheck aria-hidden />}
+                    Sign permit
+                  </button>
+                  <button
+                    className="button action"
+                    type="button"
+                    disabled={!signedPermitReadyForSelection || !connectedCanExecutePermit || Boolean(pendingAction)}
+                    title="Execute the last signed action permit."
+                    onClick={executeSignedActionPermit}
+                  >
+                    {pendingAction === "executeActionPermit" ? <Loader2 className="spin" aria-hidden /> : <Send aria-hidden />}
+                    Execute permit
+                  </button>
+                </div>
+
+                {signedActionPermit && signedPermitReadyForSelection ? (
+                  <div className="proposalBox">
+                    <span>Action permit</span>
+                    <strong>{shortHash(signedActionPermit.paramsHash)}</strong>
+                    <small>
+                      {permitActionOptions.find((option) => option.value === signedActionPermit.action)?.label ?? "Action"} · signer{" "}
+                      {shortAddress(signedActionPermit.signer)} · executor {shortAddress(signedActionPermit.executor)}
                     </small>
                   </div>
                 ) : null}

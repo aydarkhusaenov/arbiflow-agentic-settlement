@@ -33,7 +33,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -307,7 +308,8 @@ h2 {
   font-weight: 700;
 }
 
-input {
+input,
+select {
   width: 100%;
   min-height: 42px;
   min-width: 0;
@@ -319,6 +321,7 @@ input {
 }
 
 input:focus,
+select:focus,
 button:focus-visible,
 a:focus-visible {
   outline: 3px solid rgba(36, 95, 199, 0.22);

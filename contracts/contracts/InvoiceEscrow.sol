@@ -17,6 +17,9 @@ contract InvoiceEscrow is ReentrancyGuard {
     bytes32 public constant PAYMENT_MANDATE_TYPEHASH = keccak256(
         "PaymentMandate(uint256 invoiceId,address payer,bytes32 paymentRequirementHash,bytes32 payerAgentHash,bytes32 recipientAgentHash,bytes32 mandateHash,bytes32 policyHash,uint64 slaDeadline,uint64 expiresAt)"
     );
+    bytes32 public constant ACTION_PERMIT_TYPEHASH = keccak256(
+        "ActionPermit(uint256 invoiceId,uint8 action,address signer,address executor,bytes32 paramsHash,uint64 validAfter,uint64 expiresAt,uint256 nonce)"
+    );
     uint256 private constant SECP256K1_HALF_ORDER =
         0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0;
 
@@ -28,6 +31,17 @@ contract InvoiceEscrow is ReentrancyGuard {
         Refunded,
         Cancelled,
         Settled
+    }
+
+    enum PermitAction {
+        Release,
+        RequestRefund,
+        Refund,
+        MarkDelivered,
+        MarkDisputed,
+        ProposeSettlement,
+        CancelSettlementProposal,
+        AcceptSettlement
     }
 
     struct Invoice {
@@ -80,11 +94,25 @@ contract InvoiceEscrow is ReentrancyGuard {
         bytes32 root;
     }
 
+    struct ActionPermitCall {
+        uint256 invoiceId;
+        PermitAction action;
+        address signer;
+        address executor;
+        uint256 recipientAmount;
+        string dataHash;
+        uint64 validAfter;
+        uint64 expiresAt;
+        uint256 nonce;
+        bytes signature;
+    }
+
     uint256 public invoiceCount;
     mapping(uint256 invoiceId => Invoice) private invoices;
     mapping(uint256 invoiceId => AgentContext) private agentContexts;
     mapping(uint256 invoiceId => BondContext) private bondContexts;
     mapping(uint256 invoiceId => FeedbackContext) private feedbackContexts;
+    mapping(address signer => mapping(uint256 nonce => bool)) public usedActionNonces;
 
     event InvoiceCreated(
         uint256 indexed invoiceId,
@@ -164,6 +192,14 @@ contract InvoiceEscrow is ReentrancyGuard {
         uint64 feedbackCount,
         bytes32 feedbackRoot
     );
+    event ActionPermitExecuted(
+        uint256 indexed invoiceId,
+        address indexed signer,
+        address indexed executor,
+        PermitAction action,
+        uint256 nonce,
+        bytes32 paramsHash
+    );
 
     error InvalidRecipient();
     error InvalidAmount();
@@ -185,6 +221,10 @@ contract InvoiceEscrow is ReentrancyGuard {
     error MandateExpired();
     error InvalidEvidence();
     error InvalidFeedback();
+    error InvalidActionPermit();
+    error ActionPermitNotActive();
+    error ActionPermitExpired();
+    error ActionPermitUsed();
 
     function createInvoice(
         address recipient,
@@ -348,12 +388,81 @@ contract InvoiceEscrow is ReentrancyGuard {
     }
 
     function release(uint256 invoiceId) external nonReentrant {
+        _release(invoiceId, msg.sender);
+    }
+
+    function requestRefund(uint256 invoiceId) external nonReentrant {
+        _requestRefund(invoiceId, msg.sender);
+    }
+
+    function markDelivered(uint256 invoiceId, string calldata deliveryHash) external nonReentrant {
+        _markDelivered(invoiceId, msg.sender, deliveryHash);
+    }
+
+    function markDisputed(uint256 invoiceId, string calldata disputeHash) external nonReentrant {
+        _markDisputed(invoiceId, msg.sender, disputeHash);
+    }
+
+    function proposeSettlement(
+        uint256 invoiceId,
+        uint256 recipientAmount,
+        string calldata memoHash
+    ) external nonReentrant {
+        _proposeSettlement(invoiceId, msg.sender, recipientAmount, memoHash);
+    }
+
+    function cancelSettlementProposal(uint256 invoiceId) external nonReentrant {
+        _cancelSettlementProposal(invoiceId, msg.sender);
+    }
+
+    function acceptSettlement(uint256 invoiceId) external nonReentrant {
+        _acceptSettlement(invoiceId, msg.sender);
+    }
+
+    function refund(uint256 invoiceId) external nonReentrant {
+        _refund(invoiceId, msg.sender);
+    }
+
+    function executeActionPermit(ActionPermitCall calldata permit) external nonReentrant {
+        if (permit.signer == address(0)) revert InvalidActionPermit();
+        if (permit.executor != address(0) && msg.sender != permit.executor) revert Unauthorized();
+        if (block.timestamp < permit.validAfter) revert ActionPermitNotActive();
+        if (permit.expiresAt != 0 && block.timestamp >= permit.expiresAt) revert ActionPermitExpired();
+        if (usedActionNonces[permit.signer][permit.nonce]) revert ActionPermitUsed();
+
+        bytes32 paramsHash = actionParamsHash(permit.action, permit.recipientAmount, permit.dataHash);
+        bytes32 digest = actionPermitDigest(
+            permit.invoiceId,
+            permit.action,
+            permit.signer,
+            permit.executor,
+            paramsHash,
+            permit.validAfter,
+            permit.expiresAt,
+            permit.nonce
+        );
+        if (!_isValidSignature(permit.signer, digest, permit.signature)) revert InvalidSignature();
+
+        usedActionNonces[permit.signer][permit.nonce] = true;
+        _executePermittedAction(permit);
+
+        emit ActionPermitExecuted(
+            permit.invoiceId,
+            permit.signer,
+            msg.sender,
+            permit.action,
+            permit.nonce,
+            paramsHash
+        );
+    }
+
+    function _release(uint256 invoiceId, address actor) private {
         Invoice storage invoice = _invoice(invoiceId);
         if (invoice.state != State.Paid) revert InvalidState(State.Paid, invoice.state);
 
         AgentContext storage context = agentContexts[invoiceId];
-        bool payerRelease = msg.sender == invoice.payer;
-        bool recipientTimeoutRelease = msg.sender == invoice.recipient && block.timestamp >= invoice.paidAt + invoice.timeout
+        bool payerRelease = actor == invoice.payer;
+        bool recipientTimeoutRelease = actor == invoice.recipient && block.timestamp >= invoice.paidAt + invoice.timeout
             && _releaseEvidenceSatisfied(invoice, context);
         if (!payerRelease && !recipientTimeoutRelease) revert Unauthorized();
 
@@ -373,23 +482,23 @@ contract InvoiceEscrow is ReentrancyGuard {
         _transferOutIfNeeded(token, bondRecipient, bondAmount);
     }
 
-    function requestRefund(uint256 invoiceId) external nonReentrant {
+    function _requestRefund(uint256 invoiceId, address actor) private {
         Invoice storage invoice = _invoice(invoiceId);
         if (invoice.state != State.Paid) revert InvalidState(State.Paid, invoice.state);
-        if (msg.sender != invoice.payer) revert Unauthorized();
+        if (actor != invoice.payer) revert Unauthorized();
 
         invoice.refundRequestedAt = uint64(block.timestamp);
         invoice.state = State.RefundRequested;
 
-        emit RefundRequested(invoiceId, msg.sender, uint64(block.timestamp) + invoice.timeout);
+        emit RefundRequested(invoiceId, actor, uint64(block.timestamp) + invoice.timeout);
     }
 
-    function markDelivered(uint256 invoiceId, string calldata deliveryHash) external nonReentrant {
+    function _markDelivered(uint256 invoiceId, address actor, string calldata deliveryHash) private {
         Invoice storage invoice = _invoice(invoiceId);
         if (invoice.state != State.Paid && invoice.state != State.RefundRequested) {
             revert InvalidState(State.Paid, invoice.state);
         }
-        if (msg.sender != invoice.recipient) revert Unauthorized();
+        if (actor != invoice.recipient) revert Unauthorized();
         if (bytes(deliveryHash).length == 0) revert InvalidEvidence();
 
         uint64 markedAt = uint64(block.timestamp);
@@ -404,7 +513,7 @@ contract InvoiceEscrow is ReentrancyGuard {
                 "ARBIFLOW_DELIVERY_EVIDENCE_V1",
                 invoice.deliveryEvidenceRoot,
                 invoiceId,
-                msg.sender,
+                actor,
                 evidenceCount,
                 markedAt,
                 keccak256(bytes(deliveryHash))
@@ -413,23 +522,23 @@ contract InvoiceEscrow is ReentrancyGuard {
         invoice.deliveryEvidenceCount = evidenceCount;
         invoice.deliveryEvidenceRoot = evidenceRoot;
 
-        emit DeliveryMarked(invoiceId, msg.sender, deliveryHash);
-        emit DeliveryEvidenceAppended(invoiceId, msg.sender, evidenceCount, evidenceRoot, deliveryHash);
+        emit DeliveryMarked(invoiceId, actor, deliveryHash);
+        emit DeliveryEvidenceAppended(invoiceId, actor, evidenceCount, evidenceRoot, deliveryHash);
     }
 
-    function markDisputed(uint256 invoiceId, string calldata disputeHash) external nonReentrant {
+    function _markDisputed(uint256 invoiceId, address actor, string calldata disputeHash) private {
         Invoice storage invoice = _invoice(invoiceId);
         if (invoice.state != State.Paid && invoice.state != State.RefundRequested) {
             revert InvalidState(State.Paid, invoice.state);
         }
-        if (msg.sender != invoice.payer) revert Unauthorized();
+        if (actor != invoice.payer) revert Unauthorized();
         if (bytes(disputeHash).length == 0) revert InvalidEvidence();
 
         uint64 markedAt = uint64(block.timestamp);
         if (invoice.disputeMarkedAt == 0) {
             invoice.disputeHash = disputeHash;
             invoice.disputeMarkedAt = markedAt;
-            emit DisputeMarked(invoiceId, msg.sender, disputeHash);
+            emit DisputeMarked(invoiceId, actor, disputeHash);
         }
 
         uint64 evidenceCount = invoice.disputeEvidenceCount + 1;
@@ -438,7 +547,7 @@ contract InvoiceEscrow is ReentrancyGuard {
                 "ARBIFLOW_DISPUTE_EVIDENCE_V1",
                 invoice.disputeEvidenceRoot,
                 invoiceId,
-                msg.sender,
+                actor,
                 evidenceCount,
                 markedAt,
                 keccak256(bytes(disputeHash))
@@ -447,53 +556,49 @@ contract InvoiceEscrow is ReentrancyGuard {
         invoice.disputeEvidenceCount = evidenceCount;
         invoice.disputeEvidenceRoot = evidenceRoot;
 
-        emit DisputeEvidenceAppended(invoiceId, msg.sender, evidenceCount, evidenceRoot, disputeHash);
+        emit DisputeEvidenceAppended(invoiceId, actor, evidenceCount, evidenceRoot, disputeHash);
     }
 
-    function proposeSettlement(
-        uint256 invoiceId,
-        uint256 recipientAmount,
-        string calldata memoHash
-    ) external nonReentrant {
+    function _proposeSettlement(uint256 invoiceId, address actor, uint256 recipientAmount, string calldata memoHash) private {
         Invoice storage invoice = _invoice(invoiceId);
         if (invoice.state != State.Paid && invoice.state != State.RefundRequested) {
             revert InvalidState(State.Paid, invoice.state);
         }
-        if (msg.sender != invoice.payer && msg.sender != invoice.recipient) revert Unauthorized();
+        if (actor != invoice.payer && actor != invoice.recipient) revert Unauthorized();
         if (recipientAmount > invoice.amount) revert InvalidSettlementAmount();
 
-        invoice.settlementProposedBy = msg.sender;
+        invoice.settlementProposedBy = actor;
         invoice.settlementRecipientAmount = recipientAmount;
         invoice.settlementProposedAt = uint64(block.timestamp);
         invoice.settlementMemoHash = memoHash;
 
-        emit SettlementProposed(invoiceId, msg.sender, recipientAmount, invoice.amount - recipientAmount, memoHash);
+        emit SettlementProposed(invoiceId, actor, recipientAmount, invoice.amount - recipientAmount, memoHash);
     }
 
-    function cancelSettlementProposal(uint256 invoiceId) external nonReentrant {
+    function _cancelSettlementProposal(uint256 invoiceId, address actor) private {
         Invoice storage invoice = _invoice(invoiceId);
         if (invoice.state != State.Paid && invoice.state != State.RefundRequested) {
             revert InvalidState(State.Paid, invoice.state);
         }
         if (invoice.settlementProposedBy == address(0)) revert NoSettlementProposal();
-        if (msg.sender != invoice.settlementProposedBy) revert Unauthorized();
+        if (actor != invoice.settlementProposedBy) revert Unauthorized();
 
         invoice.settlementProposedBy = address(0);
         invoice.settlementRecipientAmount = 0;
         invoice.settlementProposedAt = 0;
         invoice.settlementMemoHash = "";
 
-        emit SettlementProposalCancelled(invoiceId, msg.sender);
+        emit SettlementProposalCancelled(invoiceId, actor);
     }
 
-    function acceptSettlement(uint256 invoiceId) external nonReentrant {
+    function _acceptSettlement(uint256 invoiceId, address actor) private {
         Invoice storage invoice = _invoice(invoiceId);
         if (invoice.state != State.Paid && invoice.state != State.RefundRequested) {
             revert InvalidState(State.Paid, invoice.state);
         }
         if (invoice.settlementProposedBy == address(0)) revert NoSettlementProposal();
-        if (msg.sender != invoice.payer && msg.sender != invoice.recipient) revert Unauthorized();
-        if (msg.sender == invoice.settlementProposedBy) revert Unauthorized();
+        if (actor != invoice.payer && actor != invoice.recipient) revert Unauthorized();
+        if (actor == invoice.settlementProposedBy) revert Unauthorized();
 
         uint256 recipientAmount = invoice.settlementRecipientAmount;
         uint256 payerAmount = invoice.amount - recipientAmount;
@@ -505,7 +610,7 @@ contract InvoiceEscrow is ReentrancyGuard {
         (address bondRecipient, uint256 bondAmount) = _settleServiceBond(invoiceId, invoice, true);
         bytes32 receiptHash = settlementReceiptHash(invoiceId);
 
-        emit SettlementAccepted(invoiceId, msg.sender, recipientAmount, payerAmount);
+        emit SettlementAccepted(invoiceId, actor, recipientAmount, payerAmount);
         emit SettlementReceiptFinalized(invoiceId, receiptHash, invoice.state);
 
         if (recipientAmount != 0) {
@@ -517,15 +622,15 @@ contract InvoiceEscrow is ReentrancyGuard {
         _transferOutIfNeeded(token, bondRecipient, bondAmount);
     }
 
-    function refund(uint256 invoiceId) external nonReentrant {
+    function _refund(uint256 invoiceId, address actor) private {
         Invoice storage invoice = _invoice(invoiceId);
         if (invoice.state != State.RefundRequested) revert InvalidState(State.RefundRequested, invoice.state);
 
         uint256 refundAvailableAt = invoice.refundRequestedAt + invoice.timeout;
-        bool recipientApproves = msg.sender == invoice.recipient;
-        bool payerTimeoutClaim = msg.sender == invoice.payer && block.timestamp >= refundAvailableAt;
+        bool recipientApproves = actor == invoice.recipient;
+        bool payerTimeoutClaim = actor == invoice.payer && block.timestamp >= refundAvailableAt;
         if (!recipientApproves && !payerTimeoutClaim) {
-            if (msg.sender == invoice.payer) revert RefundTimeoutNotReached(refundAvailableAt);
+            if (actor == invoice.payer) revert RefundTimeoutNotReached(refundAvailableAt);
             revert Unauthorized();
         }
 
@@ -679,6 +784,52 @@ contract InvoiceEscrow is ReentrancyGuard {
         );
     }
 
+    function actionParamsHash(
+        PermitAction action,
+        uint256 recipientAmount,
+        string calldata dataHash
+    ) public pure returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                "ARBIFLOW_ACTION_PARAMS_V1",
+                action,
+                recipientAmount,
+                keccak256(bytes(dataHash))
+            )
+        );
+    }
+
+    function actionPermitDigest(
+        uint256 invoiceId,
+        PermitAction action,
+        address signer,
+        address executor,
+        bytes32 paramsHash,
+        uint64 validAfter,
+        uint64 expiresAt,
+        uint256 nonce
+    ) public view returns (bytes32) {
+        return keccak256(
+            abi.encodePacked(
+                "\x19\x01",
+                eip712DomainSeparator(),
+                keccak256(
+                    abi.encode(
+                        ACTION_PERMIT_TYPEHASH,
+                        invoiceId,
+                        action,
+                        signer,
+                        executor,
+                        paramsHash,
+                        validAfter,
+                        expiresAt,
+                        nonce
+                    )
+                )
+            )
+        );
+    }
+
     function eip712DomainSeparator() public view returns (bytes32) {
         return keccak256(abi.encode(EIP712_DOMAIN_TYPEHASH, EIP712_NAME_HASH, EIP712_VERSION_HASH, block.chainid, address(this)));
     }
@@ -779,6 +930,39 @@ contract InvoiceEscrow is ReentrancyGuard {
                 keccak256(bytes(invoice.metadataHash))
             )
         );
+    }
+
+    function _executePermittedAction(ActionPermitCall calldata permit) private {
+        if (permit.action == PermitAction.Release) {
+            _requireEmptyActionParams(permit);
+            _release(permit.invoiceId, permit.signer);
+        } else if (permit.action == PermitAction.RequestRefund) {
+            _requireEmptyActionParams(permit);
+            _requestRefund(permit.invoiceId, permit.signer);
+        } else if (permit.action == PermitAction.Refund) {
+            _requireEmptyActionParams(permit);
+            _refund(permit.invoiceId, permit.signer);
+        } else if (permit.action == PermitAction.MarkDelivered) {
+            if (permit.recipientAmount != 0) revert InvalidActionPermit();
+            _markDelivered(permit.invoiceId, permit.signer, permit.dataHash);
+        } else if (permit.action == PermitAction.MarkDisputed) {
+            if (permit.recipientAmount != 0) revert InvalidActionPermit();
+            _markDisputed(permit.invoiceId, permit.signer, permit.dataHash);
+        } else if (permit.action == PermitAction.ProposeSettlement) {
+            _proposeSettlement(permit.invoiceId, permit.signer, permit.recipientAmount, permit.dataHash);
+        } else if (permit.action == PermitAction.CancelSettlementProposal) {
+            _requireEmptyActionParams(permit);
+            _cancelSettlementProposal(permit.invoiceId, permit.signer);
+        } else if (permit.action == PermitAction.AcceptSettlement) {
+            _requireEmptyActionParams(permit);
+            _acceptSettlement(permit.invoiceId, permit.signer);
+        } else {
+            revert InvalidActionPermit();
+        }
+    }
+
+    function _requireEmptyActionParams(ActionPermitCall calldata permit) private pure {
+        if (permit.recipientAmount != 0 || bytes(permit.dataHash).length != 0) revert InvalidActionPermit();
     }
 
     function _isValidSignature(address signer, bytes32 digest, bytes calldata signature) private view returns (bool) {
