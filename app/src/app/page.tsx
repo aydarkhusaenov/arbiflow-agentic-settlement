@@ -3,6 +3,7 @@
 import {
   Ban,
   CheckCircle2,
+  CircleDollarSign,
   Copy,
   ExternalLink,
   FilePlus2,
@@ -30,12 +31,15 @@ import {
   useWalletClient,
   useWriteContract
 } from "wagmi";
-import { arbitrumSepolia, hardhat } from "wagmi/chains";
 import { assessInvoice, AgentAction, AgentContextRecord, InvoiceRecord, stateLabels } from "@/lib/agent";
 import { invoiceEscrowAbi } from "@/lib/abi";
+import { explorerBaseForChain, hardhat, targetLiveChain } from "@/lib/chains";
+import { ROBINHOOD_AMZN_ADDRESS, ROBINHOOD_TSLA_ADDRESS, formatTokenAmount, getUsdcAddress, isUsdcToken, stockTokenSymbol } from "@/lib/tokens";
 
 const DAY = 24 * 60 * 60;
 const HOUR = 60 * 60;
+const USDC_ADDRESS = getUsdcAddress();
+const TARGET_CHAIN = targetLiveChain();
 
 type CreateForm = {
   recipient: string;
@@ -75,6 +79,7 @@ type ValidationForm = {
   schema: string;
   evidenceURI: string;
   evidenceHash: string;
+  teeAttestationHash: string;
   expiresHours: string;
   nonce: string;
 };
@@ -148,6 +153,7 @@ const defaultValidationForm: ValidationForm = {
   schema: "schema:arbiflow-delivery-validation-v1",
   evidenceURI: "ipfs://arbiflow-validator-attestation",
   evidenceHash: "",
+  teeAttestationHash: "tee:arbiflow-validator-attestation",
   expiresHours: "24",
   nonce: "1"
 };
@@ -202,6 +208,7 @@ const validationAttestationTypes = {
     { name: "schemaHash", type: "bytes32" },
     { name: "evidenceURIHash", type: "bytes32" },
     { name: "evidenceHash", type: "bytes32" },
+    { name: "teeAttestationHash", type: "bytes32" },
     { name: "expiresAt", type: "uint64" },
     { name: "nonce", type: "uint256" }
   ]
@@ -314,7 +321,9 @@ export default function Home() {
 
   const {
     data: selectedAgentContextData,
-    refetch: refetchAgentContext
+    refetch: refetchAgentContext,
+    isLoading: agentContextLoading,
+    isFetched: agentContextFetched
   } = useReadContract({
     address: contractAddress,
     abi: invoiceEscrowAbi,
@@ -390,13 +399,32 @@ export default function Home() {
           resolvedBondAmount: selectedBondContext.resolvedAmount,
           resolvedBondRecipient: selectedBondContext.resolvedRecipient,
           serviceBondSlashed: selectedBondContext.slashed
-        }
-      : selectedInvoice;
+	        }
+	      : selectedInvoice;
+  const {
+    data: selectedPendingPayoutData,
+    refetch: refetchPendingPayout
+  } = useReadContract({
+    address: contractAddress,
+    abi: invoiceEscrowAbi,
+    functionName: "withdrawable",
+    args: address && selectedInvoiceWithBond ? [address, selectedInvoiceWithBond.token] : undefined,
+    query: { enabled: Boolean(contractAddress && address && selectedInvoiceWithBond) }
+  });
+  const agentContextLoaded = Boolean(
+    selectedInvoice && !agentContextLoading && (agentContextFetched || selectedAgentContextData)
+  );
   const assessment = selectedInvoiceWithBond
-    ? assessInvoice(selectedInvoiceWithBond, address, undefined, selectedAgentContext, selectedReceiptHash)
+    ? assessInvoice(selectedInvoiceWithBond, address, undefined, selectedAgentContext, selectedReceiptHash, agentContextLoaded)
     : null;
-  const wrongChain = isConnected && chainId !== arbitrumSepolia.id && chainId !== hardhat.id;
-  const explorerBase = chainId === hardhat.id ? "" : "https://sepolia.arbiscan.io";
+  const pendingPayout = BigInt(selectedPendingPayoutData ?? 0n);
+  const hasPendingPayout = pendingPayout > 0n;
+  const agentNotes =
+    assessment && hasPendingPayout && selectedInvoiceWithBond
+      ? [`Pending payout credit: ${formatTokenValue(pendingPayout, selectedInvoiceWithBond.token)}. Withdraw it from escrow.`, ...assessment.notes]
+      : assessment?.notes ?? [];
+  const wrongChain = isConnected && chainId !== TARGET_CHAIN.id && chainId !== hardhat.id;
+  const explorerBase = explorerBaseForChain(chainId);
   const selectedInvoiceId = selectedInvoice?.id.toString();
   const isSelectedActive = selectedInvoiceWithBond ? selectedInvoiceWithBond.state === 1 || selectedInvoiceWithBond.state === 2 : false;
   const isSelectedRecipient = Boolean(
@@ -407,7 +435,7 @@ export default function Home() {
   );
   const canProposeSettlement = Boolean(selectedInvoiceWithBond && isSelectedActive && (isSelectedRecipient || isSelectedPayer));
   const settlementOpen = Boolean(selectedInvoiceWithBond && selectedInvoiceWithBond.settlementProposedBy !== zeroAddress);
-  const mandateAttached = Boolean(selectedAgentContext && selectedAgentContext.mandateHash !== zeroHash);
+  const mandateAttached = Boolean(agentContextLoaded && selectedAgentContext && selectedAgentContext.mandateHash !== zeroHash);
   const canSubmitFeedback = Boolean(
     selectedInvoiceWithBond && selectedInvoiceWithBond.state >= 3 && selectedInvoiceWithBond.state <= 6 && (isSelectedPayer || isSelectedRecipient)
   );
@@ -464,6 +492,7 @@ export default function Home() {
     await refetchRequirementHash();
     await refetchFeedbackContext();
     await refetchValidationContext();
+    await refetchPendingPayout();
   }
 
   async function submitCreate(event: FormEvent<HTMLFormElement>) {
@@ -582,14 +611,23 @@ export default function Home() {
     const recipientAgentHash = hashOrZero(mandateForm.recipientAgent);
     const mandateHash = hashText(mandate);
     const policyHash = hashOrZero(mandateForm.policy);
+    const intentMandateHash = hashText(`ap2:intent:${mandate}`);
+    const cartMandateHash = hashText(
+      `ap2:cart:${invoice.recipient}:${invoice.token}:${invoice.amount.toString()}:${invoice.metadataHash}`
+    );
+    const paymentMandateHash = mandateHash;
+    const promptPlaybackHash = hashOrZero(mandateForm.policy || mandate);
     const authorizedPayer = mandateForm.authorizedPayer.trim();
 
     if (!authorizedPayer) {
-      await runWrite("attachAgentMandate", [
+      await runWrite("attachAP2AgentMandate", [
         invoice.id,
         payerAgentHash,
         recipientAgentHash,
-        mandateHash,
+        intentMandateHash,
+        cartMandateHash,
+        paymentMandateHash,
+        promptPlaybackHash,
         policyHash,
         slaDeadline
       ]);
@@ -800,6 +838,10 @@ export default function Home() {
     await runWrite("postServiceBond", [invoice.id, amount], invoice.token === zeroAddress ? amount : undefined);
   }
 
+  async function withdrawPendingPayout(invoice: InvoiceRecord) {
+    await runWrite("withdraw", [invoice.token]);
+  }
+
   async function submitFeedback(invoice: InvoiceRecord) {
     const score = Math.round(Number(feedbackScore || "0"));
     if (!Number.isFinite(score) || score < -100 || score > 100) {
@@ -866,6 +908,7 @@ export default function Home() {
     const expiresAt = BigInt(Math.floor(Date.now() / 1000) + Math.round(expiresHours * HOUR));
     const schemaHash = hashOrZero(validationForm.schema);
     const evidenceHash = hashOrZero(validationForm.evidenceHash);
+    const teeAttestationHash = hashOrZero(validationForm.teeAttestationHash);
     const receiptHash =
       selectedReceiptHash ??
       ((await publicClient.readContract({
@@ -900,6 +943,7 @@ export default function Home() {
           schemaHash,
           evidenceURIHash,
           evidenceHash,
+          teeAttestationHash,
           expiresAt,
           nonce
         }
@@ -916,6 +960,7 @@ export default function Home() {
           schemaHash,
           evidenceURI,
           evidenceHash,
+          teeAttestationHash,
           expiresAt,
           nonce,
           signature
@@ -965,15 +1010,15 @@ export default function Home() {
           <div className="brandMark">AF</div>
           <div>
             <h1>ArbiFlow</h1>
-            <span>Arbitrum Sepolia settlement desk</span>
+            <span>{TARGET_CHAIN.name} settlement desk</span>
           </div>
         </div>
 
         <div className="walletControls">
           {wrongChain ? (
-            <button className="button warning" type="button" onClick={() => switchChain({ chainId: arbitrumSepolia.id })}>
+            <button className="button warning" type="button" onClick={() => switchChain({ chainId: TARGET_CHAIN.id })}>
               <Link2 aria-hidden />
-              Arbitrum Sepolia
+              {TARGET_CHAIN.name}
             </button>
           ) : null}
 
@@ -1058,6 +1103,40 @@ export default function Home() {
                 placeholder="ETH"
                 spellCheck={false}
               />
+              <span className="tokenPresetRow" role="group" aria-label="Token presets">
+                <button
+                  className={`tokenPreset ${isEthFormToken(form.token) ? "active" : ""}`}
+                  type="button"
+                  onClick={() => setForm({ ...form, token: "", tokenDecimals: "18", amount: form.amount || "0.05" })}
+                >
+                  <Wallet aria-hidden />
+                  ETH
+                </button>
+                <button
+                  className={`tokenPreset ${isUsdcFormToken(form.token) ? "active" : ""}`}
+                  type="button"
+                  onClick={() => setForm({ ...form, token: USDC_ADDRESS, tokenDecimals: "6", amount: form.amount === "0.05" ? "25" : form.amount })}
+                >
+                  <CircleDollarSign aria-hidden />
+                  USDC
+                </button>
+                <button
+                  className={`tokenPreset ${isStockFormToken(form.token, "TSLA") ? "active" : ""}`}
+                  type="button"
+                  onClick={() => setForm({ ...form, token: ROBINHOOD_TSLA_ADDRESS, tokenDecimals: "18", amount: form.amount === "0.05" ? "1" : form.amount })}
+                >
+                  <CircleDollarSign aria-hidden />
+                  TSLA
+                </button>
+                <button
+                  className={`tokenPreset ${isStockFormToken(form.token, "AMZN") ? "active" : ""}`}
+                  type="button"
+                  onClick={() => setForm({ ...form, token: ROBINHOOD_AMZN_ADDRESS, tokenDecimals: "18", amount: form.amount === "0.05" ? "1" : form.amount })}
+                >
+                  <CircleDollarSign aria-hidden />
+                  AMZN
+                </button>
+              </span>
             </label>
 
             <label>
@@ -1186,18 +1265,20 @@ export default function Home() {
                   <dt>Settlement</dt>
                   <dd>{settlementOpen ? "proposed" : "none"}</dd>
                 </div>
-                <div>
-                  <dt>Mandate</dt>
-                  <dd>{mandateAttached ? "attached" : "missing"}</dd>
-                </div>
-                <div>
-                  <dt>Payer lock</dt>
-                  <dd>
-                    {selectedAgentContext?.authorizedPayer && selectedAgentContext.authorizedPayer !== zeroAddress
-                      ? shortAddress(selectedAgentContext.authorizedPayer)
-                      : "open"}
-                  </dd>
-                </div>
+	                <div>
+	                  <dt>Mandate</dt>
+	                  <dd>{agentContextLoaded ? (mandateAttached ? "attached" : "missing") : "loading"}</dd>
+	                </div>
+	                <div>
+	                  <dt>Payer lock</dt>
+	                  <dd>
+	                    {!agentContextLoaded
+	                      ? "checking"
+	                      : selectedAgentContext?.authorizedPayer && selectedAgentContext.authorizedPayer !== zeroAddress
+	                        ? shortAddress(selectedAgentContext.authorizedPayer)
+	                        : "open"}
+	                  </dd>
+	                </div>
                 <div>
                   <dt>Payment req</dt>
                   <dd>{selectedRequirementHash ? shortHash(selectedRequirementHash) : "pending"}</dd>
@@ -1206,10 +1287,14 @@ export default function Home() {
                   <dt>Receipt</dt>
                   <dd>{selectedReceiptHash ? shortHash(selectedReceiptHash) : "pending"}</dd>
                 </div>
-                <div>
-                  <dt>Bond</dt>
-                  <dd>{formatBondStatus(selectedInvoiceWithBond)}</dd>
-                </div>
+	                <div>
+	                  <dt>Bond</dt>
+	                  <dd>{formatBondStatus(selectedInvoiceWithBond)}</dd>
+	                </div>
+	                <div>
+	                  <dt>Payout</dt>
+	                  <dd>{hasPendingPayout ? formatTokenValue(pendingPayout, selectedInvoiceWithBond.token) : "none"}</dd>
+	                </div>
                 <div>
                   <dt>Feedback</dt>
                   <dd>{selectedFeedbackContext && selectedFeedbackContext.count > 0n ? `${selectedFeedbackContext.count.toString()} item` : "none"}</dd>
@@ -1220,8 +1305,8 @@ export default function Home() {
                 </div>
               </dl>
 
-              <div className="actionStack">
-                {assessment.actions.map((action) => (
+	              <div className="actionStack">
+	                {assessment.actions.map((action) => (
                   <button
                     key={action.id}
                     className="button action"
@@ -1231,10 +1316,22 @@ export default function Home() {
                     onClick={() => runAction(action.id, selectedInvoiceWithBond)}
                   >
                     {actionIcon(action.id, pendingAction)}
-                    {action.label}
-                  </button>
-                ))}
-              </div>
+	                    {action.label}
+	                  </button>
+	                ))}
+	                {hasPendingPayout ? (
+	                  <button
+	                    className="button action"
+	                    type="button"
+	                    disabled={!isConnected || Boolean(pendingAction)}
+	                    title="Withdraw a pending payout that was credited after a recipient transfer failed."
+	                    onClick={() => withdrawPendingPayout(selectedInvoiceWithBond)}
+	                  >
+	                    {pendingAction === "withdraw" ? <Loader2 className="spin" aria-hidden /> : <RotateCcw aria-hidden />}
+	                    Withdraw payout
+	                  </button>
+	                ) : null}
+	              </div>
 
               <section className="mandateDesk" aria-label="Agent mandate">
                 <label>
@@ -1307,7 +1404,9 @@ export default function Home() {
                   title="Attach a hashed mandate before payment, optionally with a connected authorized-payer EIP-712 signature."
                   onClick={() => submitMandate(selectedInvoiceWithBond)}
                 >
-                  {pendingAction === "attachAgentMandate" || pendingAction === "attachSignedAgentMandate" ? (
+                  {pendingAction === "attachAgentMandate" ||
+                  pendingAction === "attachAP2AgentMandate" ||
+                  pendingAction === "attachSignedAgentMandate" ? (
                     <Loader2 className="spin" aria-hidden />
                   ) : (
                     <ShieldCheck aria-hidden />
@@ -1322,6 +1421,16 @@ export default function Home() {
                       Requirement {selectedRequirementHash ? shortHash(selectedRequirementHash) : "pending"} · Payer{" "}
                       {selectedAgentContext.authorizedPayer !== zeroAddress ? shortAddress(selectedAgentContext.authorizedPayer) : "open"}
                     </small>
+                    <div className="hashGrid" aria-label="AP2 mandate hashes">
+                      <span>Intent</span>
+                      <code>{shortHash(selectedAgentContext.intentMandateHash)}</code>
+                      <span>Cart</span>
+                      <code>{shortHash(selectedAgentContext.cartMandateHash)}</code>
+                      <span>Payment</span>
+                      <code>{shortHash(selectedAgentContext.paymentMandateHash)}</code>
+                      <span>Prompt</span>
+                      <code>{shortHash(selectedAgentContext.promptPlaybackHash)}</code>
+                    </div>
                   </div>
                 ) : null}
               </section>
@@ -1477,7 +1586,12 @@ export default function Home() {
                 <button
                   className="button action"
                   type="button"
-                  disabled={!isConnected || !isSelectedRecipient || selectedInvoiceWithBond.state >= 3 || Boolean(pendingAction)}
+	                  disabled={
+	                    !isConnected ||
+	                    !isSelectedRecipient ||
+	                    (selectedInvoiceWithBond.state !== 0 && selectedInvoiceWithBond.state !== 1) ||
+	                    Boolean(pendingAction)
+	                  }
                   title="Recipient can post an optional service bond. It returns on clean settlement and can be slashed if SLA is missed without timely delivery evidence."
                   onClick={() => submitServiceBond(selectedInvoiceWithBond)}
                 >
@@ -1593,7 +1707,7 @@ export default function Home() {
               </section>
 
               <ul className="agentNotes">
-                {assessment.notes.map((note) => (
+	                {agentNotes.map((note) => (
                   <li key={note}>{note}</li>
                 ))}
               </ul>
@@ -1747,6 +1861,17 @@ export default function Home() {
                       spellCheck={false}
                     />
                   </label>
+                  <label>
+                    TEE hash
+                    <input
+                      value={validationForm.teeAttestationHash}
+                      onChange={(event) => setValidationForm({ ...validationForm, teeAttestationHash: event.target.value })}
+                      placeholder="0x... optional"
+                      spellCheck={false}
+                    />
+                  </label>
+                </div>
+                <div className="splitInputs">
                   <label>
                     Nonce
                     <input
@@ -1902,11 +2027,15 @@ function toAgentContextRecord(raw: unknown): AgentContextRecord {
     recipientAgentHash: (value.recipientAgentHash ?? value[1] ?? zeroHash) as `0x${string}`,
     mandateHash: (value.mandateHash ?? value[2] ?? zeroHash) as `0x${string}`,
     policyHash: (value.policyHash ?? value[3] ?? zeroHash) as `0x${string}`,
-    slaDeadline: BigInt(value.slaDeadline as bigint | string | number | undefined ?? (value[4] as bigint | undefined) ?? 0n),
-    attachedAt: BigInt(value.attachedAt as bigint | string | number | undefined ?? (value[5] as bigint | undefined) ?? 0n),
-    attachedBy: (value.attachedBy ?? value[6] ?? zeroAddress) as `0x${string}`,
-    authorizedPayer: (value.authorizedPayer ?? value[7] ?? zeroAddress) as `0x${string}`,
-    mandateExpiresAt: BigInt(value.mandateExpiresAt as bigint | string | number | undefined ?? (value[8] as bigint | undefined) ?? 0n)
+    intentMandateHash: (value.intentMandateHash ?? value[4] ?? zeroHash) as `0x${string}`,
+    cartMandateHash: (value.cartMandateHash ?? value[5] ?? zeroHash) as `0x${string}`,
+    paymentMandateHash: (value.paymentMandateHash ?? value[6] ?? zeroHash) as `0x${string}`,
+    promptPlaybackHash: (value.promptPlaybackHash ?? value[7] ?? zeroHash) as `0x${string}`,
+    slaDeadline: BigInt(value.slaDeadline as bigint | string | number | undefined ?? (value[8] as bigint | undefined) ?? 0n),
+    attachedAt: BigInt(value.attachedAt as bigint | string | number | undefined ?? (value[9] as bigint | undefined) ?? 0n),
+    attachedBy: (value.attachedBy ?? value[10] ?? zeroAddress) as `0x${string}`,
+    authorizedPayer: (value.authorizedPayer ?? value[11] ?? zeroAddress) as `0x${string}`,
+    mandateExpiresAt: BigInt(value.mandateExpiresAt as bigint | string | number | undefined ?? (value[12] as bigint | undefined) ?? 0n)
   };
 }
 
@@ -1935,34 +2064,51 @@ function hashOrZero(value: string) {
 }
 
 function formatAmount(invoice: InvoiceRecord) {
-  const suffix = invoice.token === zeroAddress ? "ETH" : "TOKEN";
-  return `${trimDecimal(formatEther(invoice.amount))} ${suffix}`;
+  return formatTokenValue(invoice.amount, invoice.token);
+}
+
+function formatTokenValue(value: bigint, token: `0x${string}`) {
+  return formatTokenAmount(value, token);
 }
 
 function formatSettlement(invoice: InvoiceRecord) {
-  const recipient = trimDecimal(formatEther(invoice.settlementRecipientAmount));
-  const payer = trimDecimal(formatEther(invoice.amount - invoice.settlementRecipientAmount));
-  const suffix = invoice.token === zeroAddress ? "ETH" : "TOKEN";
-  return `${recipient} ${suffix} to recipient, ${payer} ${suffix} back`;
+  return `${formatTokenValue(invoice.settlementRecipientAmount, invoice.token)} to recipient, ${formatTokenValue(
+    invoice.amount - invoice.settlementRecipientAmount,
+    invoice.token
+  )} back`;
 }
 
 function formatBondStatus(invoice: InvoiceRecord) {
-  if (invoice.serviceBondAmount > 0n) return `${trimDecimal(formatEther(invoice.serviceBondAmount))} active`;
+  if (invoice.serviceBondAmount > 0n) return `${formatTokenValue(invoice.serviceBondAmount, invoice.token)} active`;
   if (invoice.resolvedBondAmount > 0n) return invoice.serviceBondSlashed ? "slashed" : "returned";
   return "none";
 }
 
 function formatBondDetail(invoice: InvoiceRecord) {
-  const suffix = invoice.token === zeroAddress ? "ETH" : "TOKEN";
   if (invoice.serviceBondAmount > 0n) {
-    return `${trimDecimal(formatEther(invoice.serviceBondAmount))} ${suffix} is locked as provider accountability.`;
+    return `${formatTokenValue(invoice.serviceBondAmount, invoice.token)} is locked as provider accountability.`;
   }
   if (invoice.resolvedBondAmount > 0n) {
-    return `${trimDecimal(formatEther(invoice.resolvedBondAmount))} ${suffix} ${
+    return `${formatTokenValue(invoice.resolvedBondAmount, invoice.token)} ${
       invoice.serviceBondSlashed ? "was paid to payer after missed SLA without timely evidence" : "was returned to provider"
     }.`;
   }
   return "Recipient can post an optional bond before final settlement.";
+}
+
+function isEthFormToken(token: string) {
+  const trimmed = token.trim();
+  return !trimmed || trimmed.toLowerCase() === zeroAddress;
+}
+
+function isUsdcFormToken(token: string) {
+  const trimmed = token.trim();
+  return isAddress(trimmed) && isUsdcToken(trimmed as `0x${string}`);
+}
+
+function isStockFormToken(token: string, symbol: string) {
+  const trimmed = token.trim();
+  return isAddress(trimmed) && stockTokenSymbol(trimmed as `0x${string}`) === symbol;
 }
 
 function formatTimestamp(value: bigint) {

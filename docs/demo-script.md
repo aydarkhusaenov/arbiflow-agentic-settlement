@@ -2,6 +2,39 @@
 
 Use this script for screenshots or a live walkthrough. No personal video is required by this repo.
 
+## Glass-Box On-Chain Demo
+
+After deployment to Arbitrum Sepolia, run:
+
+```bash
+pnpm contracts:live-demo:arbitrum-sepolia
+```
+
+The script creates one invoice and runs a deterministic agentic settlement loop:
+
+1. create invoice
+2. attach signed payment mandate
+3. post service bond
+4. pay invoice
+5. mark delivered
+6. release funds
+7. submit receipt-bound feedback
+8. submit receipt-bound validator attestation
+
+It prints every transaction hash and Arbiscan URL. Copy those into [ONCHAIN.md](ONCHAIN.md) before final submission.
+
+For the optional Robinhood Chain reserved-prize/RWA path, deploy and seed on
+Robinhood Chain Testnet, then run:
+
+```bash
+pnpm contracts:live-demo:robinhood-testnet
+pnpm contracts:rwa-demo:robinhood-testnet
+```
+
+The RWA script creates and funds tokenized TSLA/AMZN invoices when the throwaway
+wallet has those faucet-token balances. Copy the Robinhood explorer links into
+[ONCHAIN.md](ONCHAIN.md).
+
 ## Flow 1: Clean Settlement
 
 1. Create an ETH invoice with a recipient, metadata hash, due date, and timeout.

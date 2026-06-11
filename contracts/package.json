@@ -5,9 +5,19 @@
   "scripts": {
     "clean": "hardhat clean",
     "compile": "hardhat compile",
+    "coverage": "hardhat coverage",
     "deploy:arbitrum-sepolia": "hardhat run scripts/deploy.js --network arbitrumSepolia",
+    "deploy:robinhood-testnet": "hardhat run scripts/deploy.js --network robinhoodTestnet",
+    "seed:arbitrum-sepolia": "hardhat run scripts/seed.js --network arbitrumSepolia",
+    "seed:robinhood-testnet": "hardhat run scripts/seed.js --network robinhoodTestnet",
+    "demo": "hardhat run scripts/demo.js",
+    "demo:node": "hardhat run scripts/demo.js --network localhost",
+    "live-demo:arbitrum-sepolia": "hardhat run scripts/live-demo.js --network arbitrumSepolia",
+    "live-demo:robinhood-testnet": "hardhat run scripts/live-demo.js --network robinhoodTestnet",
+    "rwa-demo:robinhood-testnet": "hardhat run scripts/rwa-demo.js --network robinhoodTestnet",
     "test": "hardhat test",
-    "verify:arbitrum-sepolia": "hardhat verify --network arbitrumSepolia"
+    "verify:arbitrum-sepolia": "hardhat verify --network arbitrumSepolia",
+    "verify:robinhood-testnet": "hardhat verify --network robinhoodTestnet"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.0.2",
@@ -20,6 +30,7 @@
     "chai": "^4.4.1",
     "ethers": "^6.12.1",
     "hardhat": "^2.22.5",
-    "solc": "0.8.24"
+    "solc": "0.8.24",
+    "solidity-coverage": "^0.8.17"
   }
 }

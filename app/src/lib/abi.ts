@@ -59,6 +59,10 @@ export const invoiceEscrowAbi = [
           { name: "recipientAgentHash", type: "bytes32", internalType: "bytes32" },
           { name: "mandateHash", type: "bytes32", internalType: "bytes32" },
           { name: "policyHash", type: "bytes32", internalType: "bytes32" },
+          { name: "intentMandateHash", type: "bytes32", internalType: "bytes32" },
+          { name: "cartMandateHash", type: "bytes32", internalType: "bytes32" },
+          { name: "paymentMandateHash", type: "bytes32", internalType: "bytes32" },
+          { name: "promptPlaybackHash", type: "bytes32", internalType: "bytes32" },
           { name: "slaDeadline", type: "uint64", internalType: "uint64" },
           { name: "attachedAt", type: "uint64", internalType: "uint64" },
           { name: "attachedBy", type: "address", internalType: "address" },
@@ -130,6 +134,49 @@ export const invoiceEscrowAbi = [
   },
   {
     type: "function",
+    name: "getAgentReputation",
+    stateMutability: "view",
+    inputs: [{ name: "agentHash", type: "bytes32", internalType: "bytes32" }],
+    outputs: [
+      {
+        name: "",
+        type: "tuple",
+        internalType: "struct InvoiceEscrow.AgentReputation",
+        components: [
+          { name: "feedbackCount", type: "uint64", internalType: "uint64" },
+          { name: "feedbackScoreSum", type: "int256", internalType: "int256" },
+          { name: "validationCount", type: "uint64", internalType: "uint64" },
+          { name: "validationScoreSum", type: "int256", internalType: "int256" },
+          { name: "approvedValidationCount", type: "uint64", internalType: "uint64" },
+          { name: "rollingRoot", type: "bytes32", internalType: "bytes32" }
+        ]
+      }
+    ]
+  },
+  {
+    type: "function",
+    name: "getAgentReputationSummary",
+    stateMutability: "view",
+    inputs: [{ name: "agentHash", type: "bytes32", internalType: "bytes32" }],
+    outputs: [
+      { name: "count", type: "uint64", internalType: "uint64" },
+      { name: "summaryValue", type: "int256", internalType: "int256" },
+      { name: "valueDecimals", type: "uint8", internalType: "uint8" }
+    ]
+  },
+  {
+    type: "function",
+    name: "getSummary",
+    stateMutability: "view",
+    inputs: [{ name: "agentHash", type: "bytes32", internalType: "bytes32" }],
+    outputs: [
+      { name: "count", type: "uint64", internalType: "uint64" },
+      { name: "summaryValue", type: "int256", internalType: "int256" },
+      { name: "summaryValueDecimals", type: "uint8", internalType: "uint8" }
+    ]
+  },
+  {
+    type: "function",
     name: "paymentRequirementHash",
     stateMutability: "view",
     inputs: [{ name: "invoiceId", type: "uint256", internalType: "uint256" }],
@@ -156,7 +203,7 @@ export const invoiceEscrowAbi = [
     name: "actionParamsHash",
     stateMutability: "pure",
     inputs: [
-      { name: "action", type: "uint8", internalType: "enum InvoiceEscrow.PermitAction" },
+      { name: "action", type: "uint8", internalType: "uint8" },
       { name: "recipientAmount", type: "uint256", internalType: "uint256" },
       { name: "dataHash", type: "string", internalType: "string" }
     ],
@@ -168,7 +215,7 @@ export const invoiceEscrowAbi = [
     stateMutability: "view",
     inputs: [
       { name: "invoiceId", type: "uint256", internalType: "uint256" },
-      { name: "action", type: "uint8", internalType: "enum InvoiceEscrow.PermitAction" },
+      { name: "action", type: "uint8", internalType: "uint8" },
       { name: "signer", type: "address", internalType: "address" },
       { name: "executor", type: "address", internalType: "address" },
       { name: "paramsHash", type: "bytes32", internalType: "bytes32" },
@@ -200,6 +247,38 @@ export const invoiceEscrowAbi = [
   },
   {
     type: "function",
+    name: "withdrawable",
+    stateMutability: "view",
+    inputs: [
+      { name: "account", type: "address", internalType: "address" },
+      { name: "token", type: "address", internalType: "address" }
+    ],
+    outputs: [{ name: "amount", type: "uint256", internalType: "uint256" }]
+  },
+  {
+    type: "function",
+    name: "eip712DomainSeparator",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "bytes32", internalType: "bytes32" }]
+  },
+  {
+    type: "function",
+    name: "eip712Domain",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [
+      { name: "fields", type: "bytes1", internalType: "bytes1" },
+      { name: "name", type: "string", internalType: "string" },
+      { name: "version", type: "string", internalType: "string" },
+      { name: "chainId", type: "uint256", internalType: "uint256" },
+      { name: "verifyingContract", type: "address", internalType: "address" },
+      { name: "salt", type: "bytes32", internalType: "bytes32" },
+      { name: "extensions", type: "uint256[]", internalType: "uint256[]" }
+    ]
+  },
+  {
+    type: "function",
     name: "createInvoice",
     stateMutability: "nonpayable",
     inputs: [
@@ -221,6 +300,22 @@ export const invoiceEscrowAbi = [
   },
   {
     type: "function",
+    name: "payInvoiceWithAuthorization",
+    stateMutability: "payable",
+    inputs: [
+      { name: "invoiceId", type: "uint256", internalType: "uint256" },
+      { name: "payer", type: "address", internalType: "address" },
+      { name: "validAfter", type: "uint256", internalType: "uint256" },
+      { name: "validBefore", type: "uint256", internalType: "uint256" },
+      { name: "nonce", type: "bytes32", internalType: "bytes32" },
+      { name: "v", type: "uint8", internalType: "uint8" },
+      { name: "r", type: "bytes32", internalType: "bytes32" },
+      { name: "s", type: "bytes32", internalType: "bytes32" }
+    ],
+    outputs: []
+  },
+  {
+    type: "function",
     name: "attachAgentMandate",
     stateMutability: "nonpayable",
     inputs: [
@@ -228,6 +323,23 @@ export const invoiceEscrowAbi = [
       { name: "payerAgentHash", type: "bytes32", internalType: "bytes32" },
       { name: "recipientAgentHash", type: "bytes32", internalType: "bytes32" },
       { name: "mandateHash", type: "bytes32", internalType: "bytes32" },
+      { name: "policyHash", type: "bytes32", internalType: "bytes32" },
+      { name: "slaDeadline", type: "uint64", internalType: "uint64" }
+    ],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "attachAP2AgentMandate",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "invoiceId", type: "uint256", internalType: "uint256" },
+      { name: "payerAgentHash", type: "bytes32", internalType: "bytes32" },
+      { name: "recipientAgentHash", type: "bytes32", internalType: "bytes32" },
+      { name: "intentMandateHash", type: "bytes32", internalType: "bytes32" },
+      { name: "cartMandateHash", type: "bytes32", internalType: "bytes32" },
+      { name: "paymentMandateHash", type: "bytes32", internalType: "bytes32" },
+      { name: "promptPlaybackHash", type: "bytes32", internalType: "bytes32" },
       { name: "policyHash", type: "bytes32", internalType: "bytes32" },
       { name: "slaDeadline", type: "uint64", internalType: "uint64" }
     ],
@@ -262,6 +374,27 @@ export const invoiceEscrowAbi = [
   },
   {
     type: "function",
+    name: "withdraw",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "token", type: "address", internalType: "address" }],
+    outputs: [{ name: "amount", type: "uint256", internalType: "uint256" }]
+  },
+  {
+    type: "function",
+    name: "cancelActionNonce",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "nonce", type: "uint256", internalType: "uint256" }],
+    outputs: []
+  },
+  {
+    type: "function",
+    name: "cancelValidationNonce",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "nonce", type: "uint256", internalType: "uint256" }],
+    outputs: []
+  },
+  {
+    type: "function",
     name: "executeActionPermit",
     stateMutability: "nonpayable",
     inputs: [
@@ -271,7 +404,7 @@ export const invoiceEscrowAbi = [
         internalType: "struct InvoiceEscrow.ActionPermitCall",
         components: [
           { name: "invoiceId", type: "uint256", internalType: "uint256" },
-          { name: "action", type: "uint8", internalType: "enum InvoiceEscrow.PermitAction" },
+          { name: "action", type: "uint8", internalType: "uint8" },
           { name: "signer", type: "address", internalType: "address" },
           { name: "executor", type: "address", internalType: "address" },
           { name: "recipientAmount", type: "uint256", internalType: "uint256" },
@@ -304,6 +437,7 @@ export const invoiceEscrowAbi = [
           { name: "schemaHash", type: "bytes32", internalType: "bytes32" },
           { name: "evidenceURI", type: "string", internalType: "string" },
           { name: "evidenceHash", type: "bytes32", internalType: "bytes32" },
+          { name: "teeAttestationHash", type: "bytes32", internalType: "bytes32" },
           { name: "expiresAt", type: "uint64", internalType: "uint64" },
           { name: "nonce", type: "uint256", internalType: "uint256" },
           { name: "signature", type: "bytes", internalType: "bytes" }
@@ -331,6 +465,7 @@ export const invoiceEscrowAbi = [
           { name: "schemaHash", type: "bytes32", internalType: "bytes32" },
           { name: "evidenceURI", type: "string", internalType: "string" },
           { name: "evidenceHash", type: "bytes32", internalType: "bytes32" },
+          { name: "teeAttestationHash", type: "bytes32", internalType: "bytes32" },
           { name: "expiresAt", type: "uint64", internalType: "uint64" },
           { name: "nonce", type: "uint256", internalType: "uint256" },
           { name: "signature", type: "bytes", internalType: "bytes" }

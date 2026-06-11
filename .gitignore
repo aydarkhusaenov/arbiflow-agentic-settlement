@@ -3,6 +3,7 @@ node_modules
 dist
 out
 coverage
+coverage.json
 cache
 artifacts
 typechain-types

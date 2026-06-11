@@ -1,0 +1,13 @@
+{
+  "network": "arbitrumSepolia",
+  "chainId": 421614,
+  "contract": "InvoiceEscrow",
+  "address": "0x7D0893625B9f8F0d5B84531393B84dE5624bAa78",
+  "deployer": "0x28C06E3fe7ED2D15fb8901Df9D48c895E18Ed590",
+  "deploymentTx": "0xffa157b58222acb34f7217af4ce0917a137a58262b815589b20c3a59cbd5d650",
+  "blockNumber": 276251714,
+  "explorerAddress": "https://sepolia.arbiscan.io/address/0x7D0893625B9f8F0d5B84531393B84dE5624bAa78",
+  "explorerTx": "https://sepolia.arbiscan.io/tx/0xffa157b58222acb34f7217af4ce0917a137a58262b815589b20c3a59cbd5d650",
+  "timestamp": "2026-06-11T22:49:06.000Z",
+  "deploymentMethod": "raw-signed transaction broadcast through Arbitrum Sepolia RPC after Hardhat helper timed out"
+}

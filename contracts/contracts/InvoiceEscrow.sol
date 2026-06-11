@@ -5,6 +5,21 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC1271} from "@openzeppelin/contracts/interfaces/IERC1271.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+
+interface IERC3009Receiver {
+    function receiveWithAuthorization(
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external;
+}
 
 contract InvoiceEscrow is ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -21,11 +36,8 @@ contract InvoiceEscrow is ReentrancyGuard {
         "ActionPermit(uint256 invoiceId,uint8 action,address signer,address executor,bytes32 paramsHash,uint64 validAfter,uint64 expiresAt,uint256 nonce)"
     );
     bytes32 public constant VALIDATION_ATTESTATION_TYPEHASH = keccak256(
-        "ValidationAttestation(uint256 invoiceId,address validator,bytes32 validatorAgentHash,bytes32 subjectAgentHash,bool approved,int128 score,bytes32 receiptHash,bytes32 schemaHash,bytes32 evidenceURIHash,bytes32 evidenceHash,uint64 expiresAt,uint256 nonce)"
+        "ValidationAttestation(uint256 invoiceId,address validator,bytes32 validatorAgentHash,bytes32 subjectAgentHash,bool approved,int128 score,bytes32 receiptHash,bytes32 schemaHash,bytes32 evidenceURIHash,bytes32 evidenceHash,bytes32 teeAttestationHash,uint64 expiresAt,uint256 nonce)"
     );
-    uint256 private constant SECP256K1_HALF_ORDER =
-        0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0;
-
     enum State {
         Created,
         Paid,
@@ -78,6 +90,10 @@ contract InvoiceEscrow is ReentrancyGuard {
         bytes32 recipientAgentHash;
         bytes32 mandateHash;
         bytes32 policyHash;
+        bytes32 intentMandateHash;
+        bytes32 cartMandateHash;
+        bytes32 paymentMandateHash;
+        bytes32 promptPlaybackHash;
         uint64 slaDeadline;
         uint64 attachedAt;
         address attachedBy;
@@ -102,9 +118,18 @@ contract InvoiceEscrow is ReentrancyGuard {
         bytes32 root;
     }
 
+    struct AgentReputation {
+        uint64 feedbackCount;
+        int256 feedbackScoreSum;
+        uint64 validationCount;
+        int256 validationScoreSum;
+        uint64 approvedValidationCount;
+        bytes32 rollingRoot;
+    }
+
     struct ActionPermitCall {
         uint256 invoiceId;
-        PermitAction action;
+        uint8 action;
         address signer;
         address executor;
         uint256 recipientAmount;
@@ -125,6 +150,7 @@ contract InvoiceEscrow is ReentrancyGuard {
         bytes32 schemaHash;
         string evidenceURI;
         bytes32 evidenceHash;
+        bytes32 teeAttestationHash;
         uint64 expiresAt;
         uint256 nonce;
         bytes signature;
@@ -136,8 +162,10 @@ contract InvoiceEscrow is ReentrancyGuard {
     mapping(uint256 invoiceId => BondContext) private bondContexts;
     mapping(uint256 invoiceId => FeedbackContext) private feedbackContexts;
     mapping(uint256 invoiceId => ValidationContext) private validationContexts;
+    mapping(bytes32 agentHash => AgentReputation) private agentReputations;
     mapping(address signer => mapping(uint256 nonce => bool)) public usedActionNonces;
     mapping(address validator => mapping(uint256 nonce => bool)) public usedValidationNonces;
+    mapping(address account => mapping(address token => uint256 amount)) public withdrawable;
 
     event InvoiceCreated(
         uint256 indexed invoiceId,
@@ -168,6 +196,10 @@ contract InvoiceEscrow is ReentrancyGuard {
         bytes32 recipientAgentHash,
         bytes32 mandateHash,
         bytes32 policyHash,
+        bytes32 intentMandateHash,
+        bytes32 cartMandateHash,
+        bytes32 paymentMandateHash,
+        bytes32 promptPlaybackHash,
         uint64 slaDeadline,
         address authorizedPayer,
         uint64 mandateExpiresAt
@@ -217,14 +249,24 @@ contract InvoiceEscrow is ReentrancyGuard {
         uint64 feedbackCount,
         bytes32 feedbackRoot
     );
+    event ERC8004FeedbackRecorded(
+        bytes32 indexed agentHash,
+        uint64 indexed feedbackCount,
+        int128 score,
+        string tag1,
+        string tag2,
+        string feedbackURI,
+        bytes32 feedbackHash
+    );
     event ActionPermitExecuted(
         uint256 indexed invoiceId,
         address indexed signer,
         address indexed executor,
-        PermitAction action,
+        uint8 action,
         uint256 nonce,
         bytes32 paramsHash
     );
+    event ActionNonceCancelled(address indexed signer, uint256 indexed nonce);
     event AgentValidationSubmitted(
         uint256 indexed invoiceId,
         address indexed validator,
@@ -235,10 +277,33 @@ contract InvoiceEscrow is ReentrancyGuard {
         bytes32 schemaHash,
         string evidenceURI,
         bytes32 evidenceHash,
+        bytes32 teeAttestationHash,
         bytes32 receiptHash,
         uint64 validationCount,
         bytes32 validationRoot
     );
+    event ERC8004ValidationRecorded(
+        bytes32 indexed subjectAgentHash,
+        address indexed validator,
+        bytes32 indexed requestHash,
+        bool approved,
+        int128 score,
+        string responseURI,
+        bytes32 responseHash,
+        string tag
+    );
+    event ValidationNonceCancelled(address indexed validator, uint256 indexed nonce);
+    event AgentReputationUpdated(
+        bytes32 indexed agentHash,
+        uint64 feedbackCount,
+        int256 feedbackScoreSum,
+        uint64 validationCount,
+        int256 validationScoreSum,
+        uint64 approvedValidationCount,
+        bytes32 rollingRoot
+    );
+    event PayoutCredited(address indexed account, address indexed token, uint256 amount);
+    event Withdrawn(address indexed account, address indexed token, uint256 amount);
 
     error InvalidRecipient();
     error InvalidAmount();
@@ -267,6 +332,8 @@ contract InvoiceEscrow is ReentrancyGuard {
     error InvalidValidation();
     error ValidationAttestationExpired();
     error ValidationAttestationUsed();
+    error NothingToWithdraw();
+    error InvalidAuthorizationNonce();
 
     function createInvoice(
         address recipient,
@@ -333,6 +400,50 @@ contract InvoiceEscrow is ReentrancyGuard {
         emit InvoicePaid(invoiceId, msg.sender, invoice.token, invoice.amount);
     }
 
+    function payInvoiceWithAuthorization(
+        uint256 invoiceId,
+        address payer,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external payable nonReentrant {
+        Invoice storage invoice = _invoice(invoiceId);
+        if (invoice.state != State.Created) revert InvalidState(State.Created, invoice.state);
+        if (invoice.dueAt != 0 && block.timestamp > invoice.dueAt) revert InvoicePastDue();
+        if (invoice.token == address(0) || msg.value != 0) revert IncorrectPayment();
+        if (payer == address(0)) revert InvalidPayer();
+        if (nonce != paymentRequirementHash(invoiceId)) revert InvalidAuthorizationNonce();
+
+        AgentContext storage context = agentContexts[invoiceId];
+        if (context.authorizedPayer != address(0) && payer != context.authorizedPayer) revert Unauthorized();
+        if (context.mandateExpiresAt != 0 && block.timestamp >= context.mandateExpiresAt) revert MandateExpired();
+
+        uint256 balanceBefore = IERC20(invoice.token).balanceOf(address(this));
+        // slither-disable-next-line reentrancy-balance
+        IERC3009Receiver(invoice.token).receiveWithAuthorization(
+            payer,
+            address(this),
+            invoice.amount,
+            validAfter,
+            validBefore,
+            nonce,
+            v,
+            r,
+            s
+        );
+        uint256 balanceAfter = IERC20(invoice.token).balanceOf(address(this));
+        if (balanceAfter - balanceBefore != invoice.amount) revert IncorrectPayment();
+
+        invoice.payer = payer;
+        invoice.paidAt = uint64(block.timestamp);
+        invoice.state = State.Paid;
+
+        emit InvoicePaid(invoiceId, payer, invoice.token, invoice.amount);
+    }
+
     function attachAgentMandate(
         uint256 invoiceId,
         bytes32 payerAgentHash,
@@ -342,10 +453,7 @@ contract InvoiceEscrow is ReentrancyGuard {
         uint64 slaDeadline
     ) external nonReentrant {
         Invoice storage invoice = _invoice(invoiceId);
-        if (
-            msg.sender != invoice.creator && msg.sender != invoice.recipient
-                && (invoice.payer == address(0) || msg.sender != invoice.payer)
-        ) revert Unauthorized();
+        if (msg.sender != invoice.creator && msg.sender != invoice.recipient) revert Unauthorized();
         if (invoice.state != State.Created) revert InvalidState(State.Created, invoice.state);
         if (mandateHash == bytes32(0)) revert InvalidMandate();
         _validateMandateAttach(invoiceId, slaDeadline);
@@ -356,6 +464,46 @@ contract InvoiceEscrow is ReentrancyGuard {
                 recipientAgentHash: recipientAgentHash,
                 mandateHash: mandateHash,
                 policyHash: policyHash,
+                intentMandateHash: bytes32(0),
+                cartMandateHash: bytes32(0),
+                paymentMandateHash: mandateHash,
+                promptPlaybackHash: policyHash,
+                slaDeadline: slaDeadline,
+                attachedAt: uint64(block.timestamp),
+                attachedBy: msg.sender,
+                authorizedPayer: address(0),
+                mandateExpiresAt: 0
+            })
+        );
+    }
+
+    function attachAP2AgentMandate(
+        uint256 invoiceId,
+        bytes32 payerAgentHash,
+        bytes32 recipientAgentHash,
+        bytes32 intentMandateHash,
+        bytes32 cartMandateHash,
+        bytes32 paymentMandateHash,
+        bytes32 promptPlaybackHash,
+        bytes32 policyHash,
+        uint64 slaDeadline
+    ) external nonReentrant {
+        Invoice storage invoice = _invoice(invoiceId);
+        if (msg.sender != invoice.creator && msg.sender != invoice.recipient) revert Unauthorized();
+        if (invoice.state != State.Created) revert InvalidState(State.Created, invoice.state);
+        if (paymentMandateHash == bytes32(0)) revert InvalidMandate();
+        _validateMandateAttach(invoiceId, slaDeadline);
+        _attachAgentContext(
+            invoiceId,
+            AgentContext({
+                payerAgentHash: payerAgentHash,
+                recipientAgentHash: recipientAgentHash,
+                mandateHash: paymentMandateHash,
+                policyHash: policyHash,
+                intentMandateHash: intentMandateHash,
+                cartMandateHash: cartMandateHash,
+                paymentMandateHash: paymentMandateHash,
+                promptPlaybackHash: promptPlaybackHash,
                 slaDeadline: slaDeadline,
                 attachedAt: uint64(block.timestamp),
                 attachedBy: msg.sender,
@@ -402,6 +550,10 @@ contract InvoiceEscrow is ReentrancyGuard {
                 recipientAgentHash: recipientAgentHash,
                 mandateHash: mandateHash,
                 policyHash: policyHash,
+                intentMandateHash: bytes32(0),
+                cartMandateHash: bytes32(0),
+                paymentMandateHash: mandateHash,
+                promptPlaybackHash: policyHash,
                 slaDeadline: slaDeadline,
                 attachedAt: uint64(block.timestamp),
                 attachedBy: msg.sender,
@@ -414,7 +566,9 @@ contract InvoiceEscrow is ReentrancyGuard {
     function postServiceBond(uint256 invoiceId, uint256 amount) external payable nonReentrant {
         Invoice storage invoice = _invoice(invoiceId);
         if (msg.sender != invoice.recipient) revert Unauthorized();
-        if (_isFinal(invoice.state)) revert InvalidState(State.Created, invoice.state);
+        if (invoice.state != State.Created && invoice.state != State.Paid) {
+            revert InvalidState(State.Paid, invoice.state);
+        }
         if (amount == 0) revert InvalidBondAmount();
 
         if (invoice.token == address(0)) {
@@ -427,6 +581,16 @@ contract InvoiceEscrow is ReentrancyGuard {
         bondContexts[invoiceId].activeAmount += amount;
 
         emit ServiceBondPosted(invoiceId, msg.sender, invoice.token, amount);
+    }
+
+    function withdraw(address token) external nonReentrant returns (uint256 amount) {
+        amount = withdrawable[msg.sender][token];
+        if (amount == 0) revert NothingToWithdraw();
+
+        withdrawable[msg.sender][token] = 0;
+        emit Withdrawn(msg.sender, token, amount);
+
+        _transferOutStrict(token, msg.sender, amount);
     }
 
     function release(uint256 invoiceId) external nonReentrant {
@@ -496,6 +660,18 @@ contract InvoiceEscrow is ReentrancyGuard {
             permit.nonce,
             paramsHash
         );
+    }
+
+    function cancelActionNonce(uint256 nonce) external nonReentrant {
+        if (usedActionNonces[msg.sender][nonce]) revert ActionPermitUsed();
+        usedActionNonces[msg.sender][nonce] = true;
+        emit ActionNonceCancelled(msg.sender, nonce);
+    }
+
+    function cancelValidationNonce(uint256 nonce) external nonReentrant {
+        if (usedValidationNonces[msg.sender][nonce]) revert ValidationAttestationUsed();
+        usedValidationNonces[msg.sender][nonce] = true;
+        emit ValidationNonceCancelled(msg.sender, nonce);
     }
 
     function _release(uint256 invoiceId, address actor) private {
@@ -731,6 +907,39 @@ contract InvoiceEscrow is ReentrancyGuard {
         return validationContexts[invoiceId];
     }
 
+    function getAgentReputation(bytes32 agentHash) external view returns (AgentReputation memory) {
+        return agentReputations[agentHash];
+    }
+
+    function getAgentReputationSummary(bytes32 agentHash)
+        external
+        view
+        returns (uint64 count, int256 summaryValue, uint8 valueDecimals)
+    {
+        return _agentReputationSummary(agentHash);
+    }
+
+    function getSummary(bytes32 agentHash)
+        external
+        view
+        returns (uint64 count, int256 summaryValue, uint8 summaryValueDecimals)
+    {
+        return _agentReputationSummary(agentHash);
+    }
+
+    function _agentReputationSummary(bytes32 agentHash)
+        private
+        view
+        returns (uint64 count, int256 summaryValue, uint8 valueDecimals)
+    {
+        AgentReputation storage reputation = agentReputations[agentHash];
+        count = reputation.feedbackCount + reputation.validationCount;
+        valueDecimals = 0;
+        if (count == 0) return (0, 0, valueDecimals);
+        summaryValue =
+            (reputation.feedbackScoreSum + reputation.validationScoreSum) / int256(uint256(count));
+    }
+
     function submitAgentFeedback(
         uint256 invoiceId,
         bool recipientAgent,
@@ -777,6 +986,7 @@ contract InvoiceEscrow is ReentrancyGuard {
         );
         feedback.count = feedbackCount;
         feedback.root = feedbackRoot;
+        _updateFeedbackReputation(agentHash, msg.sender, score, receiptHash, feedbackRoot);
 
         emit AgentFeedbackSubmitted(
             invoiceId,
@@ -792,6 +1002,7 @@ contract InvoiceEscrow is ReentrancyGuard {
             feedbackCount,
             feedbackRoot
         );
+        emit ERC8004FeedbackRecorded(agentHash, feedbackCount, score, tag1, tag2, feedbackURI, feedbackHash);
     }
 
     function submitAgentValidation(ValidationAttestation calldata attestation) external nonReentrant {
@@ -840,11 +1051,20 @@ contract InvoiceEscrow is ReentrancyGuard {
                 attestation.schemaHash,
                 evidenceURIHash,
                 attestation.evidenceHash,
+                attestation.teeAttestationHash,
                 attestation.nonce
             )
         );
         validation.count = validationCount;
         validation.root = validationRoot;
+        _updateValidationReputation(
+            attestation.subjectAgentHash,
+            attestation.validator,
+            attestation.approved,
+            attestation.score,
+            receiptHash,
+            validationRoot
+        );
 
         emit AgentValidationSubmitted(
             attestation.invoiceId,
@@ -856,9 +1076,20 @@ contract InvoiceEscrow is ReentrancyGuard {
             attestation.schemaHash,
             attestation.evidenceURI,
             attestation.evidenceHash,
+            attestation.teeAttestationHash,
             receiptHash,
             validationCount,
             validationRoot
+        );
+        emit ERC8004ValidationRecorded(
+            attestation.subjectAgentHash,
+            attestation.validator,
+            keccak256(abi.encode(attestation.invoiceId, receiptHash, attestation.schemaHash, evidenceURIHash)),
+            attestation.approved,
+            attestation.score,
+            attestation.evidenceURI,
+            attestation.evidenceHash,
+            attestation.approved ? "approved" : "rejected"
         );
     }
 
@@ -900,7 +1131,7 @@ contract InvoiceEscrow is ReentrancyGuard {
     }
 
     function actionParamsHash(
-        PermitAction action,
+        uint8 action,
         uint256 recipientAmount,
         string calldata dataHash
     ) public pure returns (bytes32) {
@@ -916,7 +1147,7 @@ contract InvoiceEscrow is ReentrancyGuard {
 
     function actionPermitDigest(
         uint256 invoiceId,
-        PermitAction action,
+        uint8 action,
         address signer,
         address executor,
         bytes32 paramsHash,
@@ -953,6 +1184,22 @@ contract InvoiceEscrow is ReentrancyGuard {
         return keccak256(abi.encode(EIP712_DOMAIN_TYPEHASH, EIP712_NAME_HASH, EIP712_VERSION_HASH, block.chainid, address(this)));
     }
 
+    function eip712Domain()
+        external
+        view
+        returns (
+            bytes1 fields,
+            string memory name,
+            string memory version,
+            uint256 chainId,
+            address verifyingContract,
+            bytes32 salt,
+            uint256[] memory extensions
+        )
+    {
+        return (hex"0f", "ArbiFlow Agentic Settlement", "1", block.chainid, address(this), bytes32(0), new uint256[](0));
+    }
+
     function settlementReceiptHash(uint256 invoiceId) public view returns (bytes32) {
         Invoice storage invoice = _invoice(invoiceId);
         AgentContext storage context = agentContexts[invoiceId];
@@ -987,6 +1234,10 @@ contract InvoiceEscrow is ReentrancyGuard {
                 context.recipientAgentHash,
                 context.mandateHash,
                 context.policyHash,
+                context.intentMandateHash,
+                context.cartMandateHash,
+                context.paymentMandateHash,
+                context.promptPlaybackHash,
                 context.slaDeadline,
                 context.authorizedPayer,
                 context.mandateExpiresAt
@@ -1001,6 +1252,79 @@ contract InvoiceEscrow is ReentrancyGuard {
                 invoiceHash,
                 contextHash
             )
+        );
+    }
+
+    function _updateFeedbackReputation(
+        bytes32 agentHash,
+        address reviewer,
+        int128 score,
+        bytes32 receiptHash,
+        bytes32 feedbackRoot
+    ) private {
+        AgentReputation storage reputation = agentReputations[agentHash];
+        reputation.feedbackCount += 1;
+        reputation.feedbackScoreSum += score;
+        reputation.rollingRoot = keccak256(
+            abi.encode(
+                "ARBIFLOW_AGENT_REPUTATION_FEEDBACK_V1",
+                reputation.rollingRoot,
+                block.chainid,
+                address(this),
+                agentHash,
+                reviewer,
+                score,
+                reputation.feedbackCount,
+                receiptHash,
+                feedbackRoot
+            )
+        );
+        emit AgentReputationUpdated(
+            agentHash,
+            reputation.feedbackCount,
+            reputation.feedbackScoreSum,
+            reputation.validationCount,
+            reputation.validationScoreSum,
+            reputation.approvedValidationCount,
+            reputation.rollingRoot
+        );
+    }
+
+    function _updateValidationReputation(
+        bytes32 agentHash,
+        address validator,
+        bool approved,
+        int128 score,
+        bytes32 receiptHash,
+        bytes32 validationRoot
+    ) private {
+        AgentReputation storage reputation = agentReputations[agentHash];
+        reputation.validationCount += 1;
+        reputation.validationScoreSum += score;
+        if (approved) reputation.approvedValidationCount += 1;
+        reputation.rollingRoot = keccak256(
+            abi.encode(
+                "ARBIFLOW_AGENT_REPUTATION_VALIDATION_V1",
+                reputation.rollingRoot,
+                block.chainid,
+                address(this),
+                agentHash,
+                validator,
+                approved,
+                score,
+                reputation.validationCount,
+                receiptHash,
+                validationRoot
+            )
+        );
+        emit AgentReputationUpdated(
+            agentHash,
+            reputation.feedbackCount,
+            reputation.feedbackScoreSum,
+            reputation.validationCount,
+            reputation.validationScoreSum,
+            reputation.approvedValidationCount,
+            reputation.rollingRoot
         );
     }
 
@@ -1028,6 +1352,10 @@ contract InvoiceEscrow is ReentrancyGuard {
             context.recipientAgentHash,
             context.mandateHash,
             context.policyHash,
+            context.intentMandateHash,
+            context.cartMandateHash,
+            context.paymentMandateHash,
+            context.promptPlaybackHash,
             context.slaDeadline,
             context.authorizedPayer,
             context.mandateExpiresAt
@@ -1052,27 +1380,27 @@ contract InvoiceEscrow is ReentrancyGuard {
     }
 
     function _executePermittedAction(ActionPermitCall calldata permit) private {
-        if (permit.action == PermitAction.Release) {
+        if (permit.action == uint8(PermitAction.Release)) {
             _requireEmptyActionParams(permit);
             _release(permit.invoiceId, permit.signer);
-        } else if (permit.action == PermitAction.RequestRefund) {
+        } else if (permit.action == uint8(PermitAction.RequestRefund)) {
             _requireEmptyActionParams(permit);
             _requestRefund(permit.invoiceId, permit.signer);
-        } else if (permit.action == PermitAction.Refund) {
+        } else if (permit.action == uint8(PermitAction.Refund)) {
             _requireEmptyActionParams(permit);
             _refund(permit.invoiceId, permit.signer);
-        } else if (permit.action == PermitAction.MarkDelivered) {
+        } else if (permit.action == uint8(PermitAction.MarkDelivered)) {
             if (permit.recipientAmount != 0) revert InvalidActionPermit();
             _markDelivered(permit.invoiceId, permit.signer, permit.dataHash);
-        } else if (permit.action == PermitAction.MarkDisputed) {
+        } else if (permit.action == uint8(PermitAction.MarkDisputed)) {
             if (permit.recipientAmount != 0) revert InvalidActionPermit();
             _markDisputed(permit.invoiceId, permit.signer, permit.dataHash);
-        } else if (permit.action == PermitAction.ProposeSettlement) {
+        } else if (permit.action == uint8(PermitAction.ProposeSettlement)) {
             _proposeSettlement(permit.invoiceId, permit.signer, permit.recipientAmount, permit.dataHash);
-        } else if (permit.action == PermitAction.CancelSettlementProposal) {
+        } else if (permit.action == uint8(PermitAction.CancelSettlementProposal)) {
             _requireEmptyActionParams(permit);
             _cancelSettlementProposal(permit.invoiceId, permit.signer);
-        } else if (permit.action == PermitAction.AcceptSettlement) {
+        } else if (permit.action == uint8(PermitAction.AcceptSettlement)) {
             _requireEmptyActionParams(permit);
             _acceptSettlement(permit.invoiceId, permit.signer);
         } else {
@@ -1105,6 +1433,7 @@ contract InvoiceEscrow is ReentrancyGuard {
                         attestation.schemaHash,
                         keccak256(bytes(attestation.evidenceURI)),
                         attestation.evidenceHash,
+                        attestation.teeAttestationHash,
                         attestation.expiresAt,
                         attestation.nonce
                     )
@@ -1115,31 +1444,14 @@ contract InvoiceEscrow is ReentrancyGuard {
 
     function _isValidSignature(address signer, bytes32 digest, bytes calldata signature) private view returns (bool) {
         if (signer.code.length == 0) {
-            return _recoverSigner(digest, signature) == signer;
+            (address recovered, ECDSA.RecoverError error,) = ECDSA.tryRecover(digest, signature);
+            return error == ECDSA.RecoverError.NoError && recovered == signer;
         }
 
         (bool success, bytes memory result) = signer.staticcall(
             abi.encodeCall(IERC1271.isValidSignature, (digest, signature))
         );
         return success && result.length >= 32 && abi.decode(result, (bytes4)) == IERC1271.isValidSignature.selector;
-    }
-
-    function _recoverSigner(bytes32 digest, bytes calldata signature) private pure returns (address signer) {
-        if (signature.length != 65) return address(0);
-
-        bytes32 r;
-        bytes32 s;
-        uint8 v;
-        assembly {
-            r := calldataload(signature.offset)
-            s := calldataload(add(signature.offset, 0x20))
-            v := byte(0, calldataload(add(signature.offset, 0x40)))
-        }
-
-        if (uint256(s) > SECP256K1_HALF_ORDER) return address(0);
-        if (v < 27) v += 27;
-        if (v != 27 && v != 28) return address(0);
-        signer = ecrecover(digest, v, r, s);
     }
 
     function _settleServiceBond(
@@ -1165,8 +1477,8 @@ contract InvoiceEscrow is ReentrancyGuard {
     }
 
     function _releaseEvidenceSatisfied(Invoice storage invoice, AgentContext storage context) private view returns (bool) {
-        if (context.slaDeadline == 0) return true;
-        return _hasTimelyDelivery(invoice, context);
+        if (_hasTimelyDelivery(invoice, context)) return true;
+        return context.slaDeadline == 0;
     }
 
     function _hasTimelyDelivery(Invoice storage invoice, AgentContext storage context) private view returns (bool) {
@@ -1176,7 +1488,11 @@ contract InvoiceEscrow is ReentrancyGuard {
     }
 
     function _isFinal(State state) private pure returns (bool) {
-        return state == State.Released || state == State.Refunded || state == State.Cancelled || state == State.Settled;
+        if (state == State.Released) return true;
+        if (state == State.Refunded) return true;
+        if (state == State.Cancelled) return true;
+        if (state == State.Settled) return true;
+        return false;
     }
 
     function _pullExactToken(address token, address from, uint256 amount) private {
@@ -1188,15 +1504,31 @@ contract InvoiceEscrow is ReentrancyGuard {
 
     function _transferOut(address token, address to, uint256 amount) private {
         if (token == address(0)) {
+            // Reviewed: all callers finalize state before this call and enter through nonReentrant functions.
+            // slither-disable-next-line arbitrary-send-eth,reentrancy-eth
             (bool ok,) = payable(to).call{value: amount}("");
-            require(ok, "ETH_TRANSFER_FAILED");
+            if (!ok) {
+                withdrawable[to][token] += amount;
+                emit PayoutCredited(to, token, amount);
+            }
         } else {
-            IERC20(token).safeTransfer(to, amount);
+            _transferOutStrict(token, to, amount);
         }
     }
 
     function _transferOutIfNeeded(address token, address to, uint256 amount) private {
         if (amount == 0) return;
         _transferOut(token, to, amount);
+    }
+
+    function _transferOutStrict(address token, address to, uint256 amount) private {
+        if (token == address(0)) {
+            // Reviewed: withdraw zeroes the credit before this call and is protected by nonReentrant.
+            // slither-disable-next-line arbitrary-send-eth
+            (bool ok,) = payable(to).call{value: amount}("");
+            require(ok, "ETH_TRANSFER_FAILED");
+        } else {
+            IERC20(token).safeTransfer(to, amount);
+        }
     }
 }

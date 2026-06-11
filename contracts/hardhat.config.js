@@ -4,6 +4,7 @@ const { TASK_COMPILE_SOLIDITY_GET_SOLC_BUILD } = require("hardhat/builtin-tasks/
 require("@nomicfoundation/hardhat-ethers");
 require("@nomicfoundation/hardhat-chai-matchers");
 require("@nomicfoundation/hardhat-verify");
+require("solidity-coverage");
 
 const privateKey = process.env.PRIVATE_KEY;
 
@@ -28,7 +29,7 @@ module.exports = {
       viaIR: true,
       optimizer: {
         enabled: true,
-        runs: 200
+        runs: 1
       }
     }
   },
@@ -39,12 +40,20 @@ module.exports = {
     arbitrumSepolia: {
       url: process.env.ARBITRUM_SEPOLIA_RPC_URL || "https://sepolia-rollup.arbitrum.io/rpc",
       chainId: 421614,
-      accounts: privateKey ? [privateKey] : []
+      accounts: privateKey ? [privateKey] : [],
+      timeout: 120000
+    },
+    robinhoodTestnet: {
+      url: process.env.ROBINHOOD_TESTNET_RPC_URL || "https://rpc.testnet.chain.robinhood.com",
+      chainId: 46630,
+      accounts: privateKey ? [privateKey] : [],
+      timeout: 120000
     }
   },
   etherscan: {
     apiKey: {
-      arbitrumSepolia: process.env.ARBISCAN_API_KEY || ""
+      arbitrumSepolia: process.env.ARBISCAN_API_KEY || "",
+      robinhoodTestnet: process.env.ROBINHOOD_EXPLORER_API_KEY || "no-api-key"
     },
     customChains: [
       {
@@ -53,6 +62,14 @@ module.exports = {
         urls: {
           apiURL: "https://api-sepolia.arbiscan.io/api",
           browserURL: "https://sepolia.arbiscan.io"
+        }
+      },
+      {
+        network: "robinhoodTestnet",
+        chainId: 46630,
+        urls: {
+          apiURL: "https://explorer.testnet.chain.robinhood.com/api/",
+          browserURL: "https://explorer.testnet.chain.robinhood.com"
         }
       }
     ]

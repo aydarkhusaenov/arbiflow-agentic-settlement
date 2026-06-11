@@ -38,6 +38,10 @@ export type AgentContextRecord = {
   recipientAgentHash: `0x${string}`;
   mandateHash: `0x${string}`;
   policyHash: `0x${string}`;
+  intentMandateHash: `0x${string}`;
+  cartMandateHash: `0x${string}`;
+  paymentMandateHash: `0x${string}`;
+  promptPlaybackHash: `0x${string}`;
   slaDeadline: bigint;
   attachedAt: bigint;
   attachedBy: `0x${string}`;
@@ -66,7 +70,8 @@ export function assessInvoice(
   account?: `0x${string}`,
   nowSeconds = Math.floor(Date.now() / 1000),
   agentContext?: AgentContextRecord,
-  receiptHash?: `0x${string}`
+  receiptHash?: `0x${string}`,
+  agentContextLoaded = true
 ): AgentAssessment {
   const isCreator = sameAddress(account, invoice.creator);
   const isRecipient = sameAddress(account, invoice.recipient);
@@ -75,12 +80,14 @@ export function assessInvoice(
   const paidReleaseAt = Number(invoice.paidAt + invoice.timeout);
   const refundAvailableAt = Number(invoice.refundRequestedAt + invoice.timeout);
   const tokenLabel = invoice.token === zeroAddress ? "ETH" : "ERC20";
-  const mandateAttached = Boolean(agentContext && agentContext.mandateHash !== zeroHash);
-  const authorizedPayer = agentContext?.authorizedPayer ?? zeroAddress;
-  const hasAuthorizedPayer = authorizedPayer !== zeroAddress;
-  const isAuthorizedPayer = !hasAuthorizedPayer || sameAddress(account, authorizedPayer);
-  const mandateExpired = Boolean(agentContext?.mandateExpiresAt && agentContext.mandateExpiresAt > 0n && BigInt(nowSeconds) >= agentContext.mandateExpiresAt);
-  const slaDeadline = agentContext?.slaDeadline ?? 0n;
+  const mandateAttached = Boolean(agentContextLoaded && agentContext && agentContext.mandateHash !== zeroHash);
+  const authorizedPayer = agentContextLoaded ? agentContext?.authorizedPayer ?? zeroAddress : zeroAddress;
+  const hasAuthorizedPayer = agentContextLoaded && authorizedPayer !== zeroAddress;
+  const isAuthorizedPayer = agentContextLoaded && (!hasAuthorizedPayer || sameAddress(account, authorizedPayer));
+  const mandateExpired = Boolean(
+    agentContextLoaded && agentContext?.mandateExpiresAt && agentContext.mandateExpiresAt > 0n && BigInt(nowSeconds) >= agentContext.mandateExpiresAt
+  );
+  const slaDeadline = agentContextLoaded ? agentContext?.slaDeadline ?? 0n : 0n;
   const slaRequiresTimelyDelivery = slaDeadline > 0n;
   const slaPassed = Boolean(slaRequiresTimelyDelivery && BigInt(nowSeconds) > slaDeadline);
   const hasDeliveryEvidence = Boolean(invoice.deliveryHash && invoice.deliveryMarkedAt > 0n);
@@ -96,8 +103,16 @@ export function assessInvoice(
     ? `Dispute evidence: ${invoice.disputeHash || shortHash(invoice.disputeEvidenceRoot)} at ${formatUnix(Number(invoice.disputeMarkedAt))}. Evidence chain: ${invoice.disputeEvidenceCount.toString()} item${invoice.disputeEvidenceCount === 1n ? "" : "s"}.`
     : "No dispute evidence has been attached.";
   const accountabilityNotes = [
-    mandateAttached ? `Agent mandate attached: ${shortHash(agentContext?.mandateHash)}.` : "No agent mandate is attached yet.",
-    hasAuthorizedPayer ? `Authorized payer: ${shortHash(authorizedPayer)}${mandateExpired ? " (expired)" : ""}.` : "No payer signature is locked.",
+    agentContextLoaded
+      ? mandateAttached
+        ? `Agent mandate attached: ${shortHash(agentContext?.mandateHash)}.`
+        : "No agent mandate is attached yet."
+      : "Payment mandate loading...",
+    agentContextLoaded
+      ? hasAuthorizedPayer
+        ? `Authorized payer: ${shortHash(authorizedPayer)}${mandateExpired ? " (expired)" : ""}.`
+        : "No payer signature is locked."
+      : "Verifying signed payment mandate...",
     receiptHash ? `Portable receipt hash: ${shortHash(receiptHash)}.` : "Receipt hash will be available from the contract.",
     slaRequiresTimelyDelivery
       ? `SLA deadline: ${formatUnix(Number(slaDeadline))}${slaPassed ? " (passed)" : ""}.`
@@ -129,14 +144,16 @@ export function assessInvoice(
         {
           id: "pay",
           label: "Pay invoice",
-          enabled: Boolean(account && !duePassed && isAuthorizedPayer && !mandateExpired),
-          reason: duePassed
-            ? "Payment deadline has passed."
-            : mandateExpired
-              ? "Signed payment mandate has expired."
-              : isAuthorizedPayer
-                ? "Connected wallet can fund this escrow."
-                : "Only the authorized payer from the signed mandate can fund this escrow."
+          enabled: Boolean(account && agentContextLoaded && !duePassed && isAuthorizedPayer && !mandateExpired),
+          reason: !agentContextLoaded
+            ? "Verifying signed payment mandate..."
+            : duePassed
+              ? "Payment deadline has passed."
+              : mandateExpired
+                ? "Signed payment mandate has expired."
+                : isAuthorizedPayer
+                  ? "Connected wallet can fund this escrow."
+                  : "Only the authorized payer from the signed mandate can fund this escrow."
         },
         {
           id: "cancel",
