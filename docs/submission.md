@@ -110,14 +110,14 @@ Real problem solving:
 
 ## Links To Fill
 
-- GitHub repo: `TODO`
-- Deployed frontend: `TODO`
+- GitHub repo: https://github.com/aydarkhusaenov/arbiflow-agentic-settlement
+- Deployed frontend: not hosted yet; run locally with `pnpm dev` or deploy `app/` to Vercel.
 - Arbitrum Sepolia contract address: `0x7D0893625B9f8F0d5B84531393B84dE5624bAa78`
 - Explorer link: https://sepolia.arbiscan.io/address/0x7D0893625B9f8F0d5B84531393B84dE5624bAa78
 - Deployment tx: https://sepolia.arbiscan.io/tx/0xffa157b58222acb34f7217af4ce0917a137a58262b815589b20c3a59cbd5d650
 - On-chain proof: `docs/ONCHAIN.md`
-- Architecture docs: `docs/architecture.md`
-- README: `README.md`
+- Architecture docs: https://github.com/aydarkhusaenov/arbiflow-agentic-settlement/blob/main/docs/architecture.md
+- README: https://github.com/aydarkhusaenov/arbiflow-agentic-settlement/blob/main/README.md
 
 ## Deployment Details
 
