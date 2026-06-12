@@ -59,7 +59,7 @@ It prints each transaction hash and Arbiscan URL for create, mandate, bond, pay,
 ## What Makes It Strong
 
 - Trust-minimized escrow for real commercial invoices.
-- On-chain delivery evidence for off-chain work handoff.
+- On-chain delivery evidence for off-chain work.
 - Append-only delivery and dispute evidence roots for two-sided audit trails.
 - Counterparty-approved partial settlements for disputes without a centralized arbitrator.
 - AP2-style intent, cart, payment, and prompt-playback mandate hashes.
@@ -140,7 +140,7 @@ pnpm dev
 pnpm --filter @arbiflow/app dev
 ```
 
-Open `http://localhost:3000`, connect a wallet on Arbitrum Sepolia, and paste the deployed contract address if it is not already set through `NEXT_PUBLIC_ESCROW_ADDRESS`.
+Open `http://localhost:3000`, connect a wallet on Arbitrum Sepolia, and enter the deployed contract address if it is not already set through `NEXT_PUBLIC_ESCROW_ADDRESS`.
 
 Open `http://localhost:3000/activity` for live invoice counters, finalized-state counts, and recent event links.
 
@@ -154,10 +154,10 @@ Open `http://localhost:3000/activity` for live invoice counters, finalized-state
 - Problem validation: [docs/WHY.md](docs/WHY.md)
 - Competitive comparison: [docs/COMPARISON.md](docs/COMPARISON.md)
 - On-chain proof checklist: [docs/ONCHAIN.md](docs/ONCHAIN.md)
-- Human-only finish checklist: [docs/HUMAN_FINISH_STEPS.md](docs/HUMAN_FINISH_STEPS.md)
+- Operator checklist: [docs/OPERATOR_CHECKLIST.md](docs/OPERATOR_CHECKLIST.md)
 - Judge demo script: [docs/demo-script.md](docs/demo-script.md)
 - Research notes: [docs/research-notes.md](docs/research-notes.md)
 
-## No-Video Constraint
+## Video
 
-No mandatory video requirement was visible in the scraped public HackQuest page. If the final form unexpectedly requires a video URL, stop and ask before producing any video-related material.
+The public HackQuest listing did not show a mandatory video field. The primary submission materials are the public repository, Arbitrum Sepolia deployment, explorer links, and on-chain demo proof.

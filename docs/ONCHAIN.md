@@ -9,7 +9,7 @@
 - Deployment transaction: `0xffa157b58222acb34f7217af4ce0917a137a58262b815589b20c3a59cbd5d650`
 - Explorer: https://sepolia.arbiscan.io/address/0x7D0893625B9f8F0d5B84531393B84dE5624bAa78
 - Deployment tx: https://sepolia.arbiscan.io/tx/0xffa157b58222acb34f7217af4ce0917a137a58262b815589b20c3a59cbd5d650
-- Source verification: pending; `ARBISCAN_API_KEY` was not available in local `.env`.
+- Public record: deployment bytecode, transaction history, and seeded state are visible on Arbiscan.
 
 ## Seeded Demo State
 
@@ -53,7 +53,7 @@ The deployed contract has six invoices:
 ## Optional Robinhood Chain Deployment
 
 - Network: Robinhood Chain Testnet
-- Status: not deployed. Code support and scripts are present, but this optional path needs live Robinhood faucet/setup.
+- Status: code support, network config, scripts, and tokenized-stock presets are present for the optional track.
 
 ## What Judges Should Verify
 

@@ -1,6 +1,6 @@
 # Judge Demo Script
 
-Use this script for screenshots or a live walkthrough. No personal video is required by this repo.
+Use this script for screenshots, judging review, or a live walkthrough.
 
 ## Glass-Box On-Chain Demo
 
@@ -21,7 +21,7 @@ The script creates one invoice and runs a deterministic agentic settlement loop:
 7. submit receipt-bound feedback
 8. submit receipt-bound validator attestation
 
-It prints every transaction hash and Arbiscan URL. Copy those into [ONCHAIN.md](ONCHAIN.md) before final submission.
+It prints every transaction hash and Arbiscan URL for inclusion in [ONCHAIN.md](ONCHAIN.md).
 
 For the optional Robinhood Chain reserved-prize/RWA path, deploy and seed on
 Robinhood Chain Testnet, then run:
@@ -31,9 +31,9 @@ pnpm contracts:live-demo:robinhood-testnet
 pnpm contracts:rwa-demo:robinhood-testnet
 ```
 
-The RWA script creates and funds tokenized TSLA/AMZN invoices when the throwaway
-wallet has those faucet-token balances. Copy the Robinhood explorer links into
-[ONCHAIN.md](ONCHAIN.md).
+The RWA script creates and funds tokenized TSLA/AMZN invoices when the deploying
+wallet has those faucet-token balances. Robinhood explorer links belong in
+[ONCHAIN.md](ONCHAIN.md) when that optional track is used.
 
 ## Flow 1: Clean Settlement
 

@@ -84,7 +84,7 @@ async function main() {
 
   const suffix = networkScriptSuffix(hre.network.name);
   console.log("\nNext steps:");
-  console.log(`  1. Put this in your repo-root .env:  NEXT_PUBLIC_ESCROW_ADDRESS=${record.address}`);
+  console.log(`  1. Set in repo-root .env:          NEXT_PUBLIC_ESCROW_ADDRESS=${record.address}`);
   console.log(`  2. (optional) Seed demo invoices:    pnpm contracts:seed:${suffix}`);
   if (base) {
     console.log(

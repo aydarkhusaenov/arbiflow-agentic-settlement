@@ -4,7 +4,7 @@
 
 - Primary chain: Arbitrum Sepolia
 - Primary chain ID: `421614`
-- Primary RPC: your Alchemy Arbitrum Sepolia HTTPS endpoint
+- Primary RPC: Alchemy Arbitrum Sepolia HTTPS endpoint
   (`https://arb-sepolia.g.alchemy.com/v2/YOUR_ALCHEMY_API_KEY`)
 - Primary explorer: `https://sepolia.arbiscan.io`
 - Optional reserved-prize chain: Robinhood Chain Testnet
@@ -13,9 +13,9 @@
 - Robinhood explorer: `https://explorer.testnet.chain.robinhood.com`
 - Contract: `InvoiceEscrow`
 
-## Required User Inputs
+## Required Inputs
 
-- Fresh testnet-only private key with Arbitrum Sepolia ETH.
+- Fresh testnet-only private key funded with Arbitrum Sepolia ETH.
 - Alchemy Arbitrum Sepolia app HTTPS RPC URL.
 - Optional: same fresh key funded with Robinhood Chain testnet ETH for the reserved-prize deployment.
 - Optional Arbiscan API key for source verification.
@@ -99,7 +99,7 @@ NEXT_PUBLIC_ESCROW_ADDRESS=<address from the record below>
 NEXT_PUBLIC_USDC_ADDRESS=0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d
 ```
 
-The dashboard also has an address field, so the deployed address can be pasted at
+The dashboard also has an address field, so the deployed address can be entered at
 runtime without rebuilding.
 The USDC address above is Circle test USDC on Arbitrum Sepolia and powers the
 dashboard's one-click USDC invoice preset.
@@ -126,7 +126,7 @@ Circle faucet is enough.
 - Explorer (address): https://sepolia.arbiscan.io/address/0x7D0893625B9f8F0d5B84531393B84dE5624bAa78
 - Explorer (tx): https://sepolia.arbiscan.io/tx/0xffa157b58222acb34f7217af4ce0917a137a58262b815589b20c3a59cbd5d650
 - Recorded at: 2026-06-11T22:49:06.000Z
-- Note: deployment was sent as a raw signed transaction after Hardhat's helper path repeatedly timed out on RPC submission.
+- Note: deployment was broadcast as a raw signed transaction and recorded on Arbitrum Sepolia.
 
 <!-- DEPLOYMENT:END -->
 

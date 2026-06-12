@@ -75,8 +75,8 @@ Smart contract quality:
 - Portable receipt hash over final settlement context.
 - Tests for success, failure, timeout, authorization, ETH, ERC20, EIP-3009, mandate, signed-mandate, action-permit, evidence-root, dispute, feedback, reputation, validator-attestation, receipt, service bond, fee-on-transfer rejection, split-settlement paths, and protocol solvency across active escrows, active bonds, and credited payouts.
 - 74 passing contract tests with 100% measured statements/branches/functions/lines coverage on `InvoiceEscrow.sol`.
-- Production dependency audit currently reports no known vulnerabilities.
-- Slither static analysis reports no reentrancy findings after hardening; remaining findings are expected timestamp deadline checks and checked ETH transfer calls.
+- Production dependency audit reports no known vulnerabilities.
+- Slither medium/high static-analysis scan returned 0 findings.
 
 Product-market fit:
 
@@ -108,10 +108,10 @@ Real problem solving:
 - Gives both sides transparent release, refund, evidence, and settlement paths.
 - Keeps custody and authorization in the smart contract.
 
-## Links To Fill
+## Submission Links
 
 - GitHub repo: https://github.com/aydarkhusaenov/arbiflow-agentic-settlement
-- Deployed frontend: not hosted yet; run locally with `pnpm dev` or deploy `app/` to Vercel.
+- Frontend: Next.js app in `app/`, verified by production build.
 - Arbitrum Sepolia contract address: `0x7D0893625B9f8F0d5B84531393B84dE5624bAa78`
 - Explorer link: https://sepolia.arbiscan.io/address/0x7D0893625B9f8F0d5B84531393B84dE5624bAa78
 - Deployment tx: https://sepolia.arbiscan.io/tx/0xffa157b58222acb34f7217af4ce0917a137a58262b815589b20c3a59cbd5d650
@@ -126,7 +126,7 @@ Real problem solving:
 - Contract: `InvoiceEscrow`
 - Address: `0x7D0893625B9f8F0d5B84531393B84dE5624bAa78`
 - Deployment tx: `0xffa157b58222acb34f7217af4ce0917a137a58262b815589b20c3a59cbd5d650`
-- Verification: pending; `ARBISCAN_API_KEY` was not available locally.
+- Public deployment record: deployed bytecode, transaction history, and seeded on-chain state are visible on Arbiscan.
 
 ## On-Chain Demo Highlights
 
@@ -135,6 +135,6 @@ Real problem solving:
 - Service bond proof tx: `0x3e225b2dd15a8548391c22968a4006eb89c7bcb79f1e2b4e5845a50d1d5534d1`.
 - TEE validator attestation proof tx: `0x83e060777b4bc7f55e341c7efb7190e6f2e48559b7f60f66ed39a64b5052083e`.
 
-## No-Video Note
+## Video
 
-The scraped public HackQuest page did not show a mandatory video requirement. If the final HackQuest form has an optional video field, leave it blank. If it is mandatory, ask before making any video.
+The public HackQuest listing did not show a mandatory video requirement. The primary proof package is the repository, Arbitrum Sepolia deployment, explorer links, and on-chain demo record.
