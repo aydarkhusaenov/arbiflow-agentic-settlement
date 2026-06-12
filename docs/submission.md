@@ -97,7 +97,7 @@ Innovation and creativity:
 - Agent recommendations are based on live contract state, not generic help text.
 - Bridges agent mandates, identity references, SLA context, and settlement receipts without requiring an external registry.
 - Bridges instant-payment style requirements to escrow settlement instead of pretending HTTP payment is enough for service delivery.
-- Exposes agent-native surfaces: `/.well-known/agent.json`, `/api/mcp`, `/api/agent/explain`, `/api/agent/simulate`, `/api/x402/:invoiceId`, and `/api/receipt/:invoiceId`.
+- Exposes agent-native and judge-visible surfaces: `/.well-known/agent.json`, `/api/mcp`, `/api/agent/explain`, `/api/agent/simulate`, `/api/x402/:invoiceId`, `/api/receipt/:invoiceId`, and `/activity` analytics for lifecycle mix, ETH value flow, dispute rate, evidence counts, and agent reputation.
 - Adds objective crypto-economic accountability for SLA misses without letting an LLM decide slashing.
 - Adds scoped delegated execution for agents without private-key custody or broad wallet approval.
 - No centralized arbitrator is required for negotiated settlement.

@@ -111,7 +111,7 @@ Open:
 http://localhost:3000
 ```
 
-The dashboard reads `NEXT_PUBLIC_ESCROW_ADDRESS`, and also supports entering a contract address at runtime. The activity page is available at:
+The dashboard reads `NEXT_PUBLIC_ESCROW_ADDRESS`, and also supports entering a contract address at runtime. The activity page shows lifecycle analytics, ETH value flow, dispute rate, evidence counts, agent reputation, and recent event links:
 
 ```text
 http://localhost:3000/activity

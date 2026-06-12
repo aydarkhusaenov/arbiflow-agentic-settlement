@@ -54,7 +54,7 @@ After an Arbitrum Sepolia deployment, run the glass-box live demo:
 pnpm contracts:live-demo:arbitrum-sepolia
 ```
 
-It prints each transaction hash and Arbiscan URL for create, mandate, bond, pay, delivery, release, feedback, and validation. The frontend also includes `/activity` for live counters and recent contract logs, `/.well-known/agent.json` for agent discovery, `/api/mcp` for MCP-style tools, `/api/agent/explain` and `/api/agent/simulate` for agent reasoning, and `/api/receipt/:invoiceId` for structured settlement receipts.
+It prints each transaction hash and Arbiscan URL for create, mandate, bond, pay, delivery, release, feedback, and validation. The frontend also includes `/activity` for live lifecycle analytics, ETH value flow, dispute rate, evidence counts, an agent reputation leaderboard, and recent contract logs; `/.well-known/agent.json` for agent discovery; `/api/mcp` for MCP-style tools; `/api/agent/explain` and `/api/agent/simulate` for agent reasoning; and `/api/receipt/:invoiceId` for structured settlement receipts.
 
 ## What Makes It Strong
 
@@ -71,6 +71,7 @@ It prints each transaction hash and Arbiscan URL for create, mandate, bond, pay,
 - HTTP `402` payment requirements for API/agent facilitators, with x402 exact-scheme metadata and EIP-3009 `receiveWithAuthorization` escrow funding for compatible ERC20s.
 - Arbitrum Sepolia USDC preset in the dashboard, backed by Circle test USDC config.
 - Cross-invoice agent reputation summaries updated from receipt-bound feedback and validator attestations.
+- Live `/activity` analytics for lifecycle mix, ETH settlement flow, dispute rate, evidence counts, and agent reputation leaderboard.
 - Structured receipt, MCP-style, agent explain, and agent simulate APIs for autonomous agents.
 - Optional provider service bonds that return on clean settlement and can be slashed for missed SLA without timely delivery evidence.
 - Timeout paths for inactive counterparties.
@@ -142,7 +143,7 @@ pnpm --filter @arbiflow/app dev
 
 Open `http://localhost:3000`, connect a wallet on Arbitrum Sepolia, and enter the deployed contract address if it is not already set through `NEXT_PUBLIC_ESCROW_ADDRESS`.
 
-Open `http://localhost:3000/activity` for live invoice counters, finalized-state counts, and recent event links.
+Open `http://localhost:3000/activity` for live lifecycle analytics, ETH settlement flow, dispute rate, evidence counts, agent reputation leaderboard, and recent event links.
 
 ## Submission Assets
 

@@ -206,7 +206,7 @@ h2 {
 
 .summaryRail {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 12px;
   margin-bottom: 14px;
 }
@@ -260,6 +260,71 @@ h2 {
 .contractBar input {
   min-width: 0;
   flex: 1 1 auto;
+}
+
+.insightRail {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.insightPanel {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.insightPanel h2 {
+  margin-bottom: 12px;
+}
+
+.metricList {
+  display: grid;
+  gap: 8px;
+}
+
+.metricRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  min-height: 34px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid #e5ebf2;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.metricRow span,
+.emptyMini {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.86rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metricRow strong {
+  max-width: 180px;
+  overflow: hidden;
+  color: #25324a;
+  font-size: 0.9rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.emptyMini {
+  min-height: 34px;
+  padding: 8px 10px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: #fbfcfe;
+  font-weight: 700;
 }
 
 .workspace {
@@ -693,6 +758,7 @@ a:focus-visible {
   }
 
   .summaryRail,
+  .insightRail,
   .workspace,
   .formGrid,
   .detailList,
